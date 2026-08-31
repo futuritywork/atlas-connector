@@ -117,11 +117,22 @@ export class LarkConnector extends AtlasConnector {
     return row;
   }
 
+  // a filter naming a field the table doesn't have is a client error, not an empty result; applyFilters would silently drop it, so reject it loud
+  private static assertKnownFilterFields(req: QueryShape, fieldsByName: Map<string, LarkField>): void {
+    const known = (name: string) => name === RECORD_ID || fieldsByName.has(name);
+    for (const group of [req.and, ...(req.or ?? [])]) {
+      for (const filter of group) {
+        if (!known(filter.field)) throw unsupported(`unknown filter field "${filter.field}"`);
+      }
+    }
+  }
+
   // scan the table under the pushable slice of and[]; rows carry exactly `columns`
   private async *scan(req: QueryShape, deadline: Deadline): AsyncIterable<SourceRow[]> {
     if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; atlas joins locally");
     const table = await this.resolveTable(req.table, deadline);
     const fieldsByName = await this.fields(table.table_id, deadline);
+    LarkConnector.assertKnownFilterFields(req, fieldsByName);
     const columns = LarkConnector.neededColumns(req);
     const realFields = [...columns].filter((column) => fieldsByName.has(column));
     const conditions = pushdownConditions(req.and, fieldsByName);
