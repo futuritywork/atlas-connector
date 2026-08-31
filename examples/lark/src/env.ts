@@ -5,7 +5,7 @@ function required(name: string): string {
 }
 
 export const CONFIG = {
-  port: Number(process.env.CONNECTOR_PORT ?? 4100),
+  port: Number(process.env.PORT ?? process.env.CONNECTOR_PORT ?? 4100),
   bearerToken: required("ATLAS_CONNECTOR_TOKEN"),
   appId: required("LARK_APP_ID"),
   appSecret: required("LARK_APP_SECRET"),
