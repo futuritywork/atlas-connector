@@ -1,0 +1,25 @@
+{
+  "name": "@futurity/atlas-connector",
+  "version": "0.1.0",
+  "description": "Build a Futurity Atlas external connector: protocol wire, server runtime, SQL engine.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sql": "./src/sql/index.ts"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "workspaces": ["cli", "example"],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "elysia": "1.4.28",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

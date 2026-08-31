@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: typecheck sdk
+        run: bunx tsc --noEmit
+      - name: typecheck cli
+        run: bunx tsc --noEmit -p cli
+      # the vocabulary/schema drift guard: the monorepo carries a structurally identical copy of
+      # the wire vocabulary and its own agreement test; this half pins the SDK to the frozen
+      # protocol so drift fails loudly on whichever side moved
+      - name: wire vocabulary drift guard
+        run: bun test src/wire/
+      - name: tests
+        run: bun test
+
+  example-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: brightline
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CONNECTOR_DATABASE_URL: postgres://postgres:postgres@localhost:5432/brightline
+      ATLAS_CONNECTOR_TOKEN: ci-smoke-bearer-0123456789abcdef01234567
+      CONNECTOR_PORT: 4100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: seed the example database
+        run: bun run example/scripts/seed.ts
+      - name: boot the example connector
+        run: |
+          bun run example/src/index.ts &
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost:4100/.well-known/futurity/atlas.json && break
+            sleep 1
+          done
+      - name: smoke the well-known doc
+        run: |
+          doc=$(curl -fsS http://localhost:4100/.well-known/futurity/atlas.json)
+          echo "$doc"
+          echo "$doc" | grep -q '"protocolVersion":1'
+          echo "$doc" | grep -q '"slug":"brightline"'
+      - name: smoke a query
+        run: |
+          body='{"table":"owners","and":[],"sort":[],"fields":["id"],"limit":1,"timeoutMs":10000}'
+          answer=$(curl -fsS -X POST http://localhost:4100/query \
+            -H "authorization: Bearer $ATLAS_CONNECTOR_TOKEN" \
+            -H "content-type: application/json" \
+            -d "$body")
+          echo "$answer"
+          echo "$answer" | grep -q '"rows":\[{'
