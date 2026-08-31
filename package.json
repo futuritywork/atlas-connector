@@ -8,7 +8,7 @@
     ".": "./src/index.ts",
     "./sql": "./src/sql/index.ts"
   },
-  "files": ["src", "README.md", "LICENSE"],
+  "files": ["src", "!src/**/*.test.ts", "README.md", "LICENSE"],
   "workspaces": ["cli", "example"],
   "scripts": {
     "check": "tsc --noEmit",
