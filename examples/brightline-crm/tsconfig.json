@@ -1,5 +1,5 @@
 {
-  "extends": "../tsconfig.json",
+  "extends": "../../tsconfig.json",
   "compilerOptions": {
     // the seed indexes fixed-shape rows all over; the flag would demand guards on planted data
     "noUncheckedIndexedAccess": false

@@ -11,7 +11,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@futurity/atlas-connector": "file:.."
+    "@futurity/atlas-connector": "file:../.."
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
