@@ -49,7 +49,7 @@ doc for it.
 ## Run
 
 ```sh
-cp .env.example .env   # set ATLAS_CONNECTOR_TOKEN to a 32+ char secret
+cp .env.example .env   # ATLAS_CONNECTOR_TOKEN: mint one, openssl rand -hex 24; atlas gets the same value
 bun install
 bun run start          # serves on :4100
 ```

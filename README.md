@@ -94,6 +94,8 @@ import { MyConnector } from "./connector";
 serve(new MyConnector(), { token: process.env.ATLAS_CONNECTOR_TOKEN ?? "", port: 4100 });
 ```
 
+There is nothing to obtain for `ATLAS_CONNECTOR_TOKEN`: you mint it (`openssl rand -hex 24`), set it on the connector, and paste the same value into the Token field when registering the source in Atlas.
+
 `SqlConnector` implements every protocol method over `run()`: `check`
 (`SELECT 1`), discovery, queries, streaming, counts, profiling, and GROUP BY
 pushdown. Pools are cached per credential set, and an evicted pool closes only

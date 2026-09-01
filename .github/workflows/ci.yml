@@ -16,6 +16,8 @@ jobs:
         run: bunx tsc --noEmit
       - name: typecheck cli
         run: bunx tsc --noEmit -p cli
+      - name: typecheck the hosted entrypoint
+        run: bunx tsc --noEmit --strict --target esnext --module preserve --moduleResolution bundler --types bun --skipLibCheck --verbatimModuleSyntax --allowImportingTsExtensions examples/index.ts
       # the vocabulary/schema drift guard: the monorepo carries a structurally identical copy of
       # the wire vocabulary and its own agreement test; this half pins the SDK to the frozen
       # protocol so drift fails loudly on whichever side moved
@@ -83,3 +85,13 @@ jobs:
             -d "$body")
           echo "$answer"
           echo "$answer" | grep -q '"rows":\[{'
+      - name: boot the hosted entrypoint and smoke the lark doc
+        run: |
+          PORT=4101 bun run examples/index.ts &
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost:4101/lark-base/.well-known/futurity/atlas.json && break
+            sleep 1
+          done
+          doc=$(curl -fsS http://localhost:4101/lark-base/.well-known/futurity/atlas.json)
+          echo "$doc"
+          echo "$doc" | grep -q '"slug":"lark-base"'

@@ -11,6 +11,7 @@
   "files": ["src", "!src/**/*.test.ts", "README.md", "LICENSE"],
   "workspaces": ["cli", "examples/*"],
   "scripts": {
+    "start": "bun run examples/index.ts",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

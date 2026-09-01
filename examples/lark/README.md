@@ -11,7 +11,7 @@ and nothing about a base is stored between calls.
 ## run
 
 ```sh
-cp .env.example .env   # ATLAS_CONNECTOR_TOKEN only, 32+ chars
+cp .env.example .env   # ATLAS_CONNECTOR_TOKEN: mint one, openssl rand -hex 24; atlas gets the same value
 bun install
 bun run start          # serves on :4100
 bun run check          # tsc --noEmit
@@ -94,13 +94,16 @@ lark filters day-granular dates and cannot filter formula or lookup fields at
 all, so `pushdown.ts` pushes only what lark evaluates the way atlas does, and
 `query()` always re-runs the whole filter set locally.
 
-## deploy to railway
+## deploy
 
-this connector is a bun/elysia server; railway gives it a public https url, which is what atlas needs.
+this connector is one bun process: it binds `$PORT`, reads one env var, and has to be reachable over https at a stable url. anything that runs a bun process works (railway, fly, render, a container, a vm behind caddy or nginx).
 
-1. new railway service from this repo, **root directory `examples/lark`** (the `file:../..` link to the sdk resolves because railway clones the whole repo). start command `bun run start`.
-2. set one env var: `ATLAS_CONNECTOR_TOKEN` (a ≥32-char secret, the bearer atlas will send).
-3. it binds `$PORT` automatically. railway's generated `https://<name>.up.railway.app` is the url you paste into atlas as an external connector, with the same bearer token.
+1. check out the whole repo (the `file:../..` sdk link resolves against it) and `bun install --frozen-lockfile`.
+2. set `ATLAS_CONNECTOR_TOKEN`: a secret you mint (`openssl rand -hex 24`, at least 32 characters). nobody issues it; the same value goes into the token field when you register the source in atlas.
+3. start it. `bun run start` from the repo root is the hosted entrypoint, with this connector at `/lark-base`; `bun run start` inside `examples/lark` serves it alone at the origin root.
+4. put it behind https. the base url you paste into atlas is `https://<host>/lark-base` (root entrypoint) or `https://<host>` (standalone), with the same bearer token.
+
+on railway that is a service from this repo with root directory `/` and start command `bun run start`; the generated domain already terminates https.
 
 a base on `open.feishu.cn` needs `DOMAIN` in `src/lark-api.ts` changed and a second deploy;
 the domain is a property of the connector, not of a tenant's credentials.
