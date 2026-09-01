@@ -99,14 +99,13 @@ export function grainFromValues(values: unknown[]): GrainProbe {
   return { rows: values.length, distinct: groups.size, nonNull };
 }
 
-// numbers order by magnitude; everything else orders as bytes, which for iso date text is
-// chronological, so both match the sql sample query's ORDER BY
+// matches the sql sample's ORDER BY: numbers by magnitude, else bytes (chronological for iso text)
 function sampleCompare(type: AtlasType): (a: string, b: string) => number {
   if (type !== "number" && type !== "decimal") return byteOrderCompare;
   return (a, b) => decimalCompare(a, b) ?? byteOrderCompare(a, b);
 }
 
-// the sql sample query's order of operations: distinct non-nulls, sorted, capped, empties dropped
+// same order as the sql sample: "" is dropped after the cap
 export function sampleFromValues(values: unknown[], type: AtlasType, limit: number): string[] {
   const distinct = new Set<string>();
   for (const value of values) {

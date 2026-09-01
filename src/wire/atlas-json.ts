@@ -24,18 +24,17 @@ export const SourceCapabilitiesWire = z
   .strict();
 export type SourceCapabilitiesWire = z.infer<typeof SourceCapabilitiesWire>;
 
-// one input the tenant types to reach their own upstream; "password" masks it in the connect form
+// one input the tenant types to reach their own upstream
 export const CredentialFieldWire = z
   .object({
     key: z.string(),
     label: z.string(),
-    type: z.enum(["text", "password"]),
-    /** example value, shown greyed inside the empty input. */
+    /** textarea: a multi-line box for a pasted pem or key blob. */
+    type: z.enum(["text", "password", "textarea"]),
+    /** false lets the field stay blank; a blank is omitted from credentials. */
+    required: z.boolean().default(true),
     placeholder: z.string().optional(),
-    /**
-     * short markdown rendered under the input. it must say where the value is found: name the exact
-     * page in the vendor's console and link the vendor's own doc for it.
-     */
+    /** markdown under the label: name the exact vendor console page the value is found on and link the vendor's doc. */
     help: z.string().optional(),
   })
   .strict();
@@ -49,7 +48,7 @@ export const AtlasJson = z.object({
   slug: z.string().regex(/^[a-z][a-z0-9-]{2,39}$/),
   dialect: z.string().optional(),
   capabilities: SourceCapabilitiesWire,
-  // empty only when the connector genuinely reaches its source with no per-tenant secret
+  // [] only when the source needs no per-tenant secret
   credentialSchema: z.array(CredentialFieldWire),
   endpoints: z.array(z.enum(["aggregate"])),
 });

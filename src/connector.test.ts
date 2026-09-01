@@ -18,7 +18,7 @@ const DOC: AtlasJson = {
     probeConcurrency: 4,
     cheapProbes: false,
   },
-  credentialSchema: [{ key: "apiKey", label: "API key", type: "password" }],
+  credentialSchema: [{ key: "apiKey", label: "API key", type: "password", required: true }],
   endpoints: [],
 };
 
@@ -32,7 +32,6 @@ const TABLES: Record<string, SourceRow[]> = {
   prices: [{ amount: 10 }, { amount: 2 }, { amount: 10 }],
 };
 
-// only the mandatory members; every profiling answer below is derived from this query()
 class Minimal extends AtlasConnector {
   readonly slug = "minimal-test";
   readonly seen: NativeQueryRequest[] = [];
@@ -60,7 +59,6 @@ describe("AtlasConnector derived profiling", () => {
   test("exactCount counts the rows query() yields", async () => {
     const connector = new Minimal();
     expect(await connector.exactCount({ table: "orders", ...deadline })).toBe(3);
-    // no column is needed to count rows
     expect(connector.seen[0]?.fields).toEqual([]);
   });
 

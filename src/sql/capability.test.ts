@@ -39,7 +39,7 @@ const capability = (over?: Partial<Parameters<typeof sqlCapability>[0]>) =>
     catalog: scalarCatalog,
     flavor: pgFlavor({ arrayContains: true }),
     enforcesDeclaredKeys: false,
-    credentialSchema: [{ key: "databaseUrl", label: "Database URL", type: "password" }],
+    credentialSchema: [{ key: "databaseUrl", label: "Database URL", type: "password", required: true }],
     ...over,
   });
 
@@ -77,7 +77,7 @@ describe("sqlCapability doc shape", () => {
 
   test("carries the credential inputs the tenant is asked for", () => {
     expect(capability().credentialSchema).toEqual([
-      { key: "databaseUrl", label: "Database URL", type: "password" },
+      { key: "databaseUrl", label: "Database URL", type: "password", required: true },
     ]);
   });
 

@@ -28,8 +28,11 @@ test("the doc path and byte cap come from the wire limits", () => {
 });
 
 describe("AtlasJson", () => {
-  test("a minimal doc parses", () => {
-    expect(AtlasJson.parse(doc)).toEqual(doc as AtlasJson);
+  test("a minimal doc parses, filling in each credential field's required default", () => {
+    expect(AtlasJson.parse(doc)).toEqual({
+      ...doc,
+      credentialSchema: [{ ...doc.credentialSchema[0], required: true }],
+    } as AtlasJson);
   });
 
   test("unknown top-level fields strip for forward compat", () => {
@@ -69,9 +72,12 @@ describe("credentialSchema", () => {
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [] }).success).toBe(true);
   });
 
-  test("a field is key, label, a text or password type, and nothing else", () => {
+  test("a field is key, label, a text, password or textarea type, and nothing else", () => {
     const field = { key: "apiKey", label: "API key", type: "text" };
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [field] }).success).toBe(true);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "textarea" }] }).success).toBe(
+      true,
+    );
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "secret" }] }).success).toBe(
       false,
     );
@@ -81,8 +87,18 @@ describe("credentialSchema", () => {
     );
   });
 
+  test("required defaults to true, so an omitted flag never makes a field optional", () => {
+    const field = { key: "apiKey", label: "API key", type: "text" };
+    expect(AtlasJson.parse({ ...doc, credentialSchema: [field] }).credentialSchema[0]?.required).toBe(true);
+    const optional = AtlasJson.parse({ ...doc, credentialSchema: [{ ...field, required: false }] });
+    expect(optional.credentialSchema[0]?.required).toBe(false);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, required: "yes" }] }).success).toBe(
+      false,
+    );
+  });
+
   test("placeholder and help are optional strings", () => {
-    const field = { key: "apiKey", label: "API key", type: "text" as const };
+    const field = { key: "apiKey", label: "API key", type: "text" as const, required: true };
     const described = { ...field, placeholder: "sk_live_XXXXXXXXXX", help: "Settings -> [API keys](https://x.dev)." };
     expect(AtlasJson.parse({ ...doc, credentialSchema: [described] }).credentialSchema[0]).toEqual(described);
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, help: 7 }] }).success).toBe(false);

@@ -1,39 +1,30 @@
-// thin client for the lark open platform: tenant-token auth + the bitable endpoints this
-// connector reads. one instance per request, holding that request's tenant credentials.
+// thin client for the lark open platform: tenant-token auth plus the bitable endpoints this connector reads; one instance per request
 
 import { createHash } from "node:crypto";
-import { badRequest, ConnectorError, timeout as timeoutError, unknownEntity } from "@futurity/atlas-connector";
-import type { Credentials } from "@futurity/atlas-connector";
+import {
+  badRequest,
+  ConnectorError,
+  type Credentials,
+  timeout as timeoutError,
+  unknownEntity,
+} from "@futurity/atlas-connector";
 
-// the international tenant; a base on feishu.cn changes this one line
+// feishu.cn bases change this one line
 const DOMAIN = "https://open.larksuite.com";
 
 const TOKEN_SLACK_MS = 5 * 60 * 1000;
 // lark app_access_token invalid / tenant token expired: refetch once and retry
 const TOKEN_EXPIRED_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
 
-// what the tenant types into the connect form, as the connector reads it back
+const REQUIRED_KEYS = ["appId", "appSecret", "appToken"] as const;
+
 type LarkCredentials = {
   appId: string;
   appSecret: string;
   appToken: string;
 };
 
-const REQUIRED_KEYS = ["appId", "appSecret", "appToken"] as const;
-
-export function larkCredentials(credentials: Credentials): LarkCredentials {
-  const missing = REQUIRED_KEYS.filter((key) => !credentials[key]);
-  if (missing.length > 0) throw badRequest(`missing credentials: ${missing.join(", ")}`);
-  return { appId: credentials.appId, appSecret: credentials.appSecret, appToken: credentials.appToken };
-}
-
-// tenant tokens last ~7200s and belong to the app, not the base, so every tenant sharing an
-// app shares one mint. the key is a digest: a secret has no business sitting in a map key
-const tokens = new Map<string, { value: string; expiresAt: number }>();
-
-function tokenKey(credentials: LarkCredentials): string {
-  return createHash("sha256").update(`${credentials.appId}:${credentials.appSecret}`).digest("hex");
-}
+type TokenAnswer = { code: number; msg: string; tenant_access_token?: string; expire?: number };
 
 export type LarkTable = { table_id: string; name: string };
 
@@ -62,6 +53,20 @@ type SearchPage = {
 // lark's per-request deadline: every upstream call aborts at the wire request's own budget
 export type Deadline = { remainingMs(): number; check(): void };
 
+// tokens belong to the app, not the base, so tenants sharing an app share one mint
+// keyed by digest: a secret must not sit in a map key
+const tokens = new Map<string, { value: string; expiresAt: number }>();
+
+function digest(parts: string[]): string {
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
+export function larkCredentials(credentials: Credentials): LarkCredentials {
+  const missing = REQUIRED_KEYS.filter((key) => !credentials[key]);
+  if (missing.length > 0) throw badRequest(`missing credentials: ${missing.join(", ")}`);
+  return { appId: credentials.appId, appSecret: credentials.appSecret, appToken: credentials.appToken };
+}
+
 export function makeDeadline(timeoutMs: number): Deadline {
   const end = Date.now() + timeoutMs;
   return {
@@ -73,19 +78,22 @@ export function makeDeadline(timeoutMs: number): Deadline {
 }
 
 export class LarkClient {
-  constructor(private readonly credentials: LarkCredentials) {}
+  // digest of the whole set, so a cache entry never answers another set
+  readonly cacheKey: string;
+  private readonly tokenKey: string;
 
-  // the whole credential set as one opaque key, so a cache entry can never answer another set
-  get cacheKey(): string {
-    const { appId, appSecret, appToken } = this.credentials;
-    return createHash("sha256").update(JSON.stringify([appId, appSecret, appToken])).digest("hex");
+  constructor(private readonly credentials: LarkCredentials) {
+    const { appId, appSecret, appToken } = credentials;
+    this.cacheKey = digest([appId, appSecret, appToken]);
+    this.tokenKey = digest([appId, appSecret]);
   }
 
   // POST /auth/v3/tenant_access_token/internal → { tenant_access_token, expire } (expire ≈ 7200s)
   private async tenantToken(deadline: Deadline): Promise<string> {
-    const key = tokenKey(this.credentials);
+    const key = this.tokenKey;
     const cached = tokens.get(key);
     if (cached && Date.now() < cached.expiresAt) return cached.value;
+
     deadline.check();
     const res = await fetch(`${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal`, {
       method: "POST",
@@ -93,10 +101,11 @@ export class LarkClient {
       body: JSON.stringify({ app_id: this.credentials.appId, app_secret: this.credentials.appSecret }),
       signal: AbortSignal.timeout(deadline.remainingMs()),
     });
-    const body = (await res.json()) as { code: number; msg: string; tenant_access_token?: string; expire?: number };
+    const body = (await res.json()) as TokenAnswer;
     if (body.code !== 0 || !body.tenant_access_token) {
       throw new Error(`lark tenant_access_token failed: code=${body.code} ${body.msg}`);
     }
+
     tokens.set(key, {
       value: body.tenant_access_token,
       expiresAt: Date.now() + (body.expire ?? 7200) * 1000 - TOKEN_SLACK_MS,
@@ -124,10 +133,11 @@ export class LarkClient {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: AbortSignal.timeout(deadline.remainingMs()),
     });
+
     const envelope = (await res.json()) as { code: number; msg: string; data?: T };
     if (envelope.code !== 0) {
       if (TOKEN_EXPIRED_CODES.has(envelope.code) && !retried) {
-        tokens.delete(tokenKey(this.credentials));
+        tokens.delete(this.tokenKey);
         return await this.request(method, path, deadline, opts, true);
       }
       if (res.status === 404 || envelope.code === 91402) {
@@ -138,20 +148,26 @@ export class LarkClient {
     return envelope.data as T;
   }
 
-  // the credential proof: the mint answers for app_id/app_secret, the read for app_token.
-  // every failure leaves as a plain Error, because /check's message is written for the tenant
+  private tablesPath(): string {
+    return `/open-apis/bitable/v1/apps/${this.credentials.appToken}/tables`;
+  }
+
+  // the mint proves app_id/app_secret, the read proves app_token
+  // failures leave as plain Error: /check shows the message to the tenant
   async checkAccess(deadline: Deadline): Promise<void> {
     try {
       await this.request<{ items?: LarkTable[] }>("GET", this.tablesPath(), deadline, {
         query: { page_size: "1" },
       });
     } catch (error) {
+      // lark answers 91402 NOTEXIST both for a token that names no base and for a base the app was never added to
+      if (error instanceof ConnectorError && error.status === 404) {
+        throw new Error(
+          `Lark has no base ${this.credentials.appToken} this app can open: check the token, and that the app was added to the base as a collaborator (${error.message})`,
+        );
+      }
       throw error instanceof ConnectorError ? new Error(error.message) : error;
     }
-  }
-
-  private tablesPath(): string {
-    return `/open-apis/bitable/v1/apps/${this.credentials.appToken}/tables`;
   }
 
   // GET pagination: follow page_token until has_more clears; metadata pages cap at 100

@@ -1,5 +1,4 @@
-// the connector's whole configuration surface. the database url is not here: it is the
-// tenant's credential, sent on every request and never stored
+// no database url: that is the tenant's credential, on every request and never stored
 export const CONFIG = {
   port: Number(process.env.CONNECTOR_PORT ?? 4100),
   schema: process.env.CONNECTOR_SCHEMA ?? "crm",

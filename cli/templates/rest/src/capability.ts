@@ -17,13 +17,14 @@ export const ATLAS_JSON: AtlasJson = {
     probeConcurrency: 4,
     cheapProbes: false,
   },
-  // YOUR CODE HERE: what a tenant types to reach their own instance; "password" masks the input.
-  // help is markdown under the input: name the exact page in the vendor's ui and link its doc
+  // YOUR CODE HERE: what a tenant types to reach their own instance. "password" masks the input, "textarea" fits a pasted key, required: false lets it stay blank.
+  // help is markdown under the label: name the exact page in the vendor's ui and link its doc
   credentialSchema: [
     {
       key: "baseUrl",
       label: "API base URL",
       type: "text",
+      required: true,
       placeholder: "https://acme.example.com/api/v2",
       help: "The root your instance answers on, with no trailing slash. It is the address in your browser when you are signed in to the vendor's app.",
     },
@@ -31,6 +32,7 @@ export const ATLAS_JSON: AtlasJson = {
       key: "apiKey",
       label: "API key",
       type: "password",
+      required: true,
       help: "Vendor console → **Settings → API keys → Create key**. Copy it when it is shown; the console never shows it again.",
     },
   ],

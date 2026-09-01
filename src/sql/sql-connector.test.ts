@@ -24,7 +24,7 @@ class FakeSqlConnector extends SqlConnector<FakePool> {
 
   protected async openPool(credentials: Credentials): Promise<FakePool> {
     const url = credentials.databaseUrl ?? "";
-    // the first open of "flaky" fails: a cached rejection would fail the retry too
+    // the first open of "flaky" fails, later ones succeed
     if (url === "flaky" && this.#flakyOpens++ === 0) {
       throw new Error("password authentication failed");
     }
@@ -60,7 +60,7 @@ const query = (databaseUrl: string): NativeQueryRequest => ({
   timeoutMs: 1000,
 });
 
-// closing is deliberately off the request path, so it lands a turn later
+// closing lands a turn later
 const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("per-tenant pools", () => {
@@ -101,7 +101,7 @@ describe("per-tenant pools", () => {
     expect(pools[0]?.closed).toBe(true);
     expect(pools[1]?.closed).toBe(false);
     expect(pools[16]?.closed).toBe(false);
-    // t0 fell out of the cache, so its next call opens a second pool
+    // t0 was evicted, so it reopens
     await connector.check(check("t0"));
     expect(connector.opened.filter((url) => url === "t0").length).toBe(2);
   });

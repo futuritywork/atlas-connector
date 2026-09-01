@@ -25,14 +25,16 @@ Scriptable: `bun create atlas-connector my-crm --kind sql --port 4100`.
 You host one connector; every client connects to it with their own credentials.
 The capability doc declares a `credentialSchema`, the exact inputs Atlas shows
 the person connecting, and each authenticated request carries those values back
-as `credentials`, which is the only place your code reads them from. Give every
-field a `placeholder` and a `help` string: `help` is short markdown rendered
-under the input, and it should name the exact page in the vendor's console the
-value is copied from and link the vendor's doc for it. Nothing
-upstream is configured in the connector's environment and nothing is persisted
-between requests, so one deployment serves any number of tenants, an added
-tenant is a form someone fills in, and a leaked connector process holds no
-customer secret to leak.
+as `credentials`, which is the only place your code reads them from. A field is
+`text`, `password` (masked) or `textarea` (a multi-line box for a pasted key),
+and `required: false` marks one a tenant may leave blank, which then arrives
+with the key absent. Give every field a `placeholder` and a `help` string:
+`help` is short markdown rendered between the label and the input, and it
+should name the exact page in the vendor's console the value is copied from and
+link the vendor's doc for it. Nothing upstream is configured in the connector's
+environment and nothing is persisted between requests, so one deployment serves
+any number of tenants, an added tenant is a form someone fills in, and a leaked
+connector process holds no customer secret to leak.
 
 ## Quickstart: a SQL database
 

@@ -19,8 +19,6 @@ export class BrightlineConnector extends SqlConnector<SQL> {
   // keys come only from real pg constraints (PKs + owners.email UNIQUE)
   override readonly enforcesDeclaredKeys = true;
 
-  // the tenant's own database, from the credentials on the request; the sdk opens one pool
-  // per credential set and closes it when the cache evicts it
   protected override async openPool(credentials: Credentials): Promise<SQL> {
     if (!credentials.databaseUrl) throw new Error("databaseUrl is required");
     return new SQL(pinnedUrl(credentials.databaseUrl));
@@ -35,8 +33,7 @@ export class BrightlineConnector extends SqlConnector<SQL> {
     return (await pool.unsafe(sql, params)) as Row[];
   }
 
-  // real pg cursor instead of limit/offset windows, on every read: framing, heartbeats, and
-  // the stream deadlines are serve()'s job, so this only produces raw batches and cleans up
+  // a real pg cursor instead of limit/offset windows; framing and deadlines are serve()'s job
   protected override async *streamBatches(
     pool: SQL,
     built: { sql: string; params: unknown[] },
@@ -46,7 +43,7 @@ export class BrightlineConnector extends SqlConnector<SQL> {
     const reserved = await pool.reserve();
     try {
       await reserved.unsafe("BEGIN");
-      await reserved.unsafe(`SET LOCAL statement_timeout = ${Math.ceil(req.timeoutMs)}`);
+      await reserved.unsafe(`SET LOCAL statement_timeout = ${req.timeoutMs}`);
       await reserved.unsafe(`DECLARE ${cursor} NO SCROLL CURSOR FOR ${built.sql}`, built.params);
       for (;;) {
         const rows = (await reserved.unsafe(

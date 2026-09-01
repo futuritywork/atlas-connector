@@ -28,8 +28,7 @@ export const LARK_TYPE = {
   autoNumber: 1005,
 } as const;
 
-// number cells are doubles and date cells are epoch-ms instants, so they cross as number and
-// datetime; bitable stores nothing that is exact-decimal or day-only
+// no decimal or date: bitable numbers are doubles and dates are epoch-ms instants
 const ATLAS_TYPE_BY_LARK: Record<number, AtlasType> = {
   [LARK_TYPE.text]: "string",
   [LARK_TYPE.number]: "number",
@@ -108,8 +107,7 @@ export function flattenValue(raw: unknown, larkType: number): AtlasValue {
     }
     case LARK_TYPE.singleLink:
     case LARK_TYPE.duplexLink: {
-      // link cells read as { link_record_ids: [...] }. the first id crosses as text, which is
-      // what makes the field joinable against the target table's record_id; extra ids are dropped
+      // link cells read as { link_record_ids: [...] }; only the first id crosses, as text, so the field joins against record_id
       const ids = raw && typeof raw === "object" && "link_record_ids" in raw ? raw.link_record_ids : raw;
       return Array.isArray(ids) && ids.length > 0 ? String(ids[0]) : null;
     }

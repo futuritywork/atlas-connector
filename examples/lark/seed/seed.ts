@@ -20,7 +20,8 @@ function parseDataset(): DatasetName {
   const args = process.argv.slice(2);
   const inline = args.find((arg) => arg.startsWith("--dataset="));
   const flagAt = args.indexOf("--dataset");
-  const value = inline ? inline.slice("--dataset=".length) : flagAt >= 0 ? args[flagAt + 1] : undefined;
+  let value = flagAt >= 0 ? args[flagAt + 1] : undefined;
+  if (inline) value = inline.slice("--dataset=".length);
   if (value !== "northwind" && value !== "harbor") {
     throw new Error("usage: bun run seed/seed.ts --dataset northwind|harbor");
   }
@@ -80,6 +81,10 @@ const PHONE = 13;
 const URL = 15;
 const LINK = 18;
 
+const RATE_LIMITED = 99991400;
+const BATCH_SIZE = 500;
+const TOKEN_SLACK_MS = 5 * 60 * 1000;
+
 type FieldSpec =
   | { name: string; type: typeof TEXT | typeof CHECKBOX | typeof PHONE | typeof URL }
   | { name: string; type: typeof NUMBER; formatter?: string }
@@ -87,15 +92,35 @@ type FieldSpec =
   | { name: string; type: typeof DATE }
   | { name: string; type: typeof LINK; target: string };
 
-const RATE_LIMITED = 99991400;
-const BATCH_SIZE = 500;
-const TOKEN_SLACK_MS = 5 * 60 * 1000;
-
 type Row = Record<string, unknown>;
+
 type LarkTable = { table_id: string; name: string };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fieldPayload(field: FieldSpec, tableIds: Record<string, string>): Record<string, unknown> {
+  switch (field.type) {
+    case SELECT:
+      return {
+        field_name: field.name,
+        type: SELECT,
+        property: { options: field.options.map((name) => ({ name })) },
+      };
+    case DATE:
+      return {
+        field_name: field.name,
+        type: DATE,
+        property: { date_formatter: "yyyy/MM/dd", auto_fill: false },
+      };
+    case NUMBER:
+      return { field_name: field.name, type: NUMBER, property: { formatter: field.formatter ?? "0" } };
+    case LINK:
+      return { field_name: field.name, type: LINK, property: { table_id: tableIds[field.target] } };
+    default:
+      return { field_name: field.name, type: field.type };
+  }
 }
 
 class LarkBase {
@@ -185,29 +210,6 @@ class LarkBase {
       { automatic_fields: false },
     );
     return page.total ?? 0;
-  }
-}
-
-function fieldPayload(field: FieldSpec, tableIds: Record<string, string>): Record<string, unknown> {
-  switch (field.type) {
-    case SELECT:
-      return {
-        field_name: field.name,
-        type: SELECT,
-        property: { options: field.options.map((name) => ({ name })) },
-      };
-    case DATE:
-      return {
-        field_name: field.name,
-        type: DATE,
-        property: { date_formatter: "yyyy/MM/dd", auto_fill: false },
-      };
-    case NUMBER:
-      return { field_name: field.name, type: NUMBER, property: { formatter: field.formatter ?? "0" } };
-    case LINK:
-      return { field_name: field.name, type: LINK, property: { table_id: tableIds[field.target] } };
-    default:
-      return { field_name: field.name, type: field.type };
   }
 }
 
@@ -569,7 +571,6 @@ const harbor: readonly TableSpec[] = [
       { name: "severity", type: SELECT, options: SEVERITIES },
     ],
     rows: (rng, ctx) => {
-      // incidents attach to voyages that actually sailed
       const sailed = ctx.rows.voyages
         .map((voyage, index) => ({ voyage, index }))
         .filter(({ voyage }) => voyage.status !== "planned");

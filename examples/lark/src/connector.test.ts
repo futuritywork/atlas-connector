@@ -3,6 +3,7 @@ import { LarkConnector } from "./connector";
 
 const TENANT_A = { appId: "cli_a", appSecret: "secret-a", appToken: "base-x" };
 const WRONG_SECRET = { ...TENANT_A, appSecret: "not-the-secret" };
+const MISSING_BASE = { ...TENANT_A, appToken: "base-missing" };
 const MINT_PATH = "/open-apis/auth/v3/tenant_access_token/internal";
 
 const realFetch = globalThis.fetch;
@@ -10,7 +11,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-// the slice of the lark api discover() walks, answered from one base's fixture
+// the lark endpoints discover() walks, answered from one fixture base
 function stubLark(): string[] {
   const paths: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -24,6 +25,7 @@ function stubLark(): string[] {
       return json({ code: 0, msg: "ok", tenant_access_token: "t-a", expire: 7200 });
     }
     if (url.pathname.endsWith("/tables")) {
+      if (url.pathname.includes("/apps/base-missing/")) return json({ code: 91402, msg: "NOTEXIST" });
       return json({ code: 0, msg: "ok", data: { items: [{ table_id: "tbl1", name: "deals" }], has_more: false } });
     }
     if (url.pathname.endsWith("/fields")) {
@@ -57,7 +59,7 @@ describe("per-tenant isolation", () => {
 
     paths.length = 0;
     await expect(connector.discover(req(WRONG_SECRET))).rejects.toThrow(/app secret invalid/);
-    // the mint is as far as it got: no table list was served out of the other tenant's cache
+    // only the mint ran: nothing came out of the other tenant's cache
     expect(paths).toEqual([MINT_PATH]);
   });
 
@@ -66,5 +68,12 @@ describe("per-tenant isolation", () => {
     const connector = new LarkConnector();
     await expect(connector.check(req(WRONG_SECRET))).rejects.toThrow(/app secret invalid/);
     await connector.check(req(TENANT_A));
+  });
+
+  test("check names the base and the collaborator step when the app token opens nothing", async () => {
+    stubLark();
+    await expect(new LarkConnector().check(req(MISSING_BASE))).rejects.toThrow(
+      /base base-missing .*collaborator.*NOTEXIST/,
+    );
   });
 });

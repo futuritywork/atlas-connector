@@ -38,10 +38,13 @@ advertised op that `query()` silently drops corrupts answers downstream. Start
 narrow, widen as you implement.
 
 `credentialSchema` is the other half: it is exactly the form Atlas shows a
-tenant, and exactly the keys `req.credentials` will carry back. Each field's
-`help` is short markdown rendered under its input, so write it for the person
-filling the form in: name the exact page in the vendor's console the value
-comes from and link the vendor's doc for it.
+tenant, and exactly the keys `req.credentials` will carry back. A field is
+`text`, `password` (masked) or `textarea` (a multi-line box for a pasted key),
+and `required: false` marks one a tenant may leave blank, which then arrives
+with the key absent. Each field's `help` is short markdown rendered between its
+label and its input, so write it for the person filling the form in: name the
+exact page in the vendor's console the value comes from and link the vendor's
+doc for it.
 
 ## Run
 

@@ -6,7 +6,7 @@ import { AtlasType, AtlasValue, DateGrain, Filter, JoinField, UserSort } from ".
 
 const deadlineShape = { timeoutMs: z.number().int().min(1) } as const;
 
-// the tenant's own upstream secrets, on every authed request: a connector holds none between calls
+// on every authed request; a connector holds none between calls
 export const Credentials = z.record(z.string(), z.string());
 export type Credentials = z.infer<typeof Credentials>;
 
@@ -63,7 +63,6 @@ export type AggregateSourceQueryWire = z.infer<typeof AggregateSourceQueryWire>;
 export const DialectQueryBody = z.object({ sql: z.string(), params: z.array(AtlasValue) }).strict();
 export type DialectQueryBody = z.infer<typeof DialectQueryBody>;
 
-// proves one tenant's credentials and nothing else; the thrown message reaches the caller
 export const CheckRequest = WireAuthed;
 export type CheckRequest = z.infer<typeof CheckRequest>;
 
@@ -125,8 +124,7 @@ export type ProbeGrainRequest = z.infer<typeof ProbeGrainRequest>;
 export const CountExactRequest = z.object({ table: z.string() }).extend(authedShape);
 export type CountExactRequest = z.infer<typeof CountExactRequest>;
 
-// sorted distinct head as text: numeric and temporal values by magnitude, text by byte order,
-// nulls excluded and the empty spelling dropped after the limit is taken
+// answer: distinct non-null values as text, sorted (numbers by magnitude, else bytes), capped at limit, "" dropped after the cap
 export const SampleKeyValuesRequest = z
   .object({
     table: z.string(),

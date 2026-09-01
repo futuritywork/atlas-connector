@@ -5,24 +5,20 @@ import { AtlasJson } from "../wire/atlas-json";
 import { bearerGuard } from "./auth";
 import { connectorRoutes } from "./routes";
 
+const MIN_TOKEN_LENGTH = 32;
+const DEFAULT_PORT = 4100;
+
+// base impls that scan through query()
+const DERIVED = ["profileColumns", "profileLink", "profileGrain", "exactCount", "sampleColumnValues"] as const;
+
 export type ServeOptions = {
   token: string; // bearer; boot-fails under 32 chars
   port?: number; // default 4100
   hostname?: string;
 };
 
-const MIN_TOKEN_LENGTH = 32;
-const DEFAULT_PORT = 4100;
+type BaseImplMethod = "aggregate" | (typeof DERIVED)[number];
 
-type BaseImplMethod =
-  | "aggregate"
-  | "profileColumns"
-  | "profileLink"
-  | "profileGrain"
-  | "exactCount"
-  | "sampleColumnValues";
-
-// prototype identity: an un-overridden method still resolves to the base impl
 function isBaseImpl(connector: AtlasConnector, method: BaseImplMethod): boolean {
   return connector[method] === AtlasConnector.prototype[method];
 }
@@ -45,9 +41,7 @@ export function createApp(connector: AtlasConnector, opts: Pick<ServeOptions, "t
     console.warn(`[${connector.slug}] aggregate() is implemented but endpoints omits "aggregate"`);
   }
 
-  const derived = (
-    ["profileColumns", "profileLink", "profileGrain", "exactCount", "sampleColumnValues"] as const
-  ).filter((method) => isBaseImpl(connector, method));
+  const derived = DERIVED.filter((method) => isBaseImpl(connector, method));
   if (derived.length > 0) {
     console.log(
       `[${connector.slug}] ${derived.join(", ")} scan through query(); override them for source-side math`,

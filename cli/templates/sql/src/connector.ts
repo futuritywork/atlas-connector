@@ -22,8 +22,7 @@ export class MyConnector extends SqlConnector<SQL> {
     await pool.close();
   }
 
-  // the only path sql text reaches the database on. params bind positionally ($1..$n);
-  // never interpolate values into the sql text.
+  // the only path sql text reaches the database on; params bind positionally ($1..$n), never interpolated
   async run(pool: SQL, sql: string, params: unknown[]): Promise<Row[]> {
     return (await pool.unsafe(sql, params)) as Row[];
   }

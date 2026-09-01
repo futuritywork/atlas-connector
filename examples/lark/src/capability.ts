@@ -17,12 +17,13 @@ export const ATLAS_JSON: AtlasJson = {
     probeConcurrency: 2, // bitable rate limit is 20 rps app-wide; probes are full scans
     cheapProbes: false,
   },
-  // the app credentials and the base they open; one connector serves every tenant that types a set
+  // per tenant: the app credentials and the base they open
   credentialSchema: [
     {
       key: "appId",
       label: "App ID",
       type: "text",
+      required: true,
       placeholder: "cli_XXXXXXXXXXXXXXXX",
       help: "Lark Developer Console → your app → **Credentials & Basic Info**, the field labelled **App ID**. Your apps are listed at [open.larksuite.com/app](https://open.larksuite.com/app).",
     },
@@ -30,12 +31,14 @@ export const ATLAS_JSON: AtlasJson = {
       key: "appSecret",
       label: "App secret",
       type: "password",
+      required: true,
       help: "The **App Secret** on that same **Credentials & Basic Info** page of the [Lark Developer Console](https://open.larksuite.com/app). The app also needs the `bitable:app:readonly` permission.",
     },
     {
       key: "appToken",
       label: "Base app token",
       type: "text",
+      required: true,
       placeholder: "bascnXXXXXXXXXXXXXXXXXXXXXX",
       help: "The id in the base's URL, `https://<tenant>.larksuite.com/base/<app_token>`. Add the app to that base as a collaborator first, or it cannot read the tables.",
     },

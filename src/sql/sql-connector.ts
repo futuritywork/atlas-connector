@@ -31,23 +31,23 @@ import * as probes from "./probes";
 import { buildCount, buildSelect, renderRows } from "./select";
 import { requireTable } from "./sql-util";
 
-export type Row = Record<string, unknown>;
-
-// how many tenants keep an open pool; past it the least recently used one closes
+// open pools; the least recently used closes past this
 const MAX_POOLS = 16;
 
-// key order never changes the key, so the same credentials always reach the same pool
+export type Row = Record<string, unknown>;
+
+// an evicted lease closes once inFlight reaches 0
+type PoolLease<Pool> = { pool: Promise<Pool>; inFlight: number; evicted: boolean };
+
+type BuiltSelect = ReturnType<typeof buildSelect>;
+
+// sorted, so key order never changes the key
 function credentialsKey(credentials: Credentials): string {
   const sorted = Object.keys(credentials)
     .sort()
     .map((key) => [key, credentials[key]]);
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
-
-// inFlight counts the callers that can still touch the pool object; eviction waits them out
-type PoolLease<Pool> = { pool: Promise<Pool>; inFlight: number; evicted: boolean };
-
-type BuiltSelect = ReturnType<typeof buildSelect>;
 
 function* chunked(rows: Row[], built: BuiltSelect): Generator<SourceRow[]> {
   for (let i = 0; i < rows.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
@@ -61,30 +61,31 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
   readonly flavor: SqlFlavor = postgres();
   // true only when every declared unique/primaryKey is a real db constraint; the honest default is false
   readonly enforcesDeclaredKeys: boolean = false;
-  // what the tenant types to reach their database; override when the driver takes separate parts
+  // override when the driver takes separate parts
   readonly credentialSchema: CredentialField[] = [
     {
       key: "databaseUrl",
       label: "Database URL",
       type: "password",
+      required: true,
       placeholder: "postgres://user:password@host:5432/db",
       help: "The whole connection URL, password included: `postgres://user:password@host:5432/db`. Use a read-only role that can see the schema this connector reads.",
     },
   ];
 
+  readonly #pools = new Map<string, PoolLease<Pool>>();
+  #ctx: SqlContext | undefined;
+
   /**
-   * open one tenant's connection pool from their credentials; opened once per credential set and reused.
+   * one tenant's pool from their credentials; opened once per credential set and reused.
    * throw here and the tenant sees the driver's own message from `/check`.
    */
   protected abstract openPool(credentials: Credentials): Promise<Pool>;
 
-  /** close a pool the cache evicted; the driver's own shutdown, nothing else. */
+  /** the driver's own shutdown for a pool the cache evicted. */
   protected abstract closePool(pool: Pool): Promise<void>;
 
-  /**
-   * the one method an author writes: one parameterized statement on that tenant's pool.
-   * params bind positionally in flavor.placeholder order; values never travel inside the sql text.
-   */
+  /** one parameterized statement on that tenant's pool; params bind positionally in flavor.placeholder order, never inside the sql text. */
   abstract run(pool: Pool, sql: string, params: unknown[]): Promise<Row[]>;
 
   // cursor seam: a driver with real cursors overrides this to yield raw row batches for the
@@ -95,12 +96,9 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     req: NativeQueryRequest,
   ): AsyncIterable<Row[]>;
 
-  readonly #pools = new Map<string, PoolLease<Pool>>();
+  // #region pool cache
 
-  /**
-   * run one statement chain on this tenant's pool; the pool stays open for as long as fn holds it.
-   * an override that needs the raw pool (a dialect's own `check`, say) goes through here.
-   */
+  /** the pool stays open while fn holds it; an override that needs the raw pool (a dialect's own `check`) goes through here. */
   protected async withPool<T>(credentials: Credentials, fn: (pool: Pool) => Promise<T>): Promise<T> {
     const lease = await this.#acquire(credentials);
     try {
@@ -110,7 +108,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     }
   }
 
-  // one pool per credential set, least recently used first in insertion order
+  // map order is lru order: delete+set marks recent
   async #acquire(credentials: Credentials): Promise<PoolLease<Pool>> {
     const key = credentialsKey(credentials);
     const cached = this.#pools.get(key);
@@ -126,6 +124,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       }
       return cached;
     }
+
     const lease: PoolLease<Pool> = { pool: this.openPool(credentials), inFlight: 1, evicted: false };
     this.#pools.set(key, lease);
     try {
@@ -145,7 +144,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     if (lease.evicted && lease.inFlight === 0) this.#close(lease);
   }
 
-  // closing happens off the request path: a slow driver shutdown must not delay a query
+  // off the request path: a slow shutdown must not delay a query
   #close(lease: PoolLease<Pool>): void {
     void lease.pool.then((pool) => this.closePool(pool)).catch(() => {});
   }
@@ -159,12 +158,12 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     }
   }
 
-  // probe and discovery sql speak to one tenant's pool through this
   async #probe<T>(credentials: Credentials, fn: (run: probes.SqlRunner) => Promise<T>): Promise<T> {
     return await this.withPool(credentials, (pool) => fn((sql, params) => this.run(pool, sql, params)));
   }
 
-  #ctx: SqlContext | undefined;
+  // #endregion
+
   protected get ctx(): SqlContext {
     this.#ctx ??= {
       catalog: this.catalog,
@@ -175,11 +174,13 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     return this.#ctx;
   }
 
+  // #region protocol
+
   override capability(): AtlasJson {
     return sqlCapability(this);
   }
 
-  // one round trip on the tenant's own pool; a dialect without a bare SELECT overrides it
+  // a dialect without a bare SELECT 1 overrides this
   override async check(req: CheckRequest): Promise<void> {
     await this.withPool(req.credentials, (pool) => this.run(pool, "SELECT 1", []));
   }
@@ -205,12 +206,14 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       }
       return;
     }
+
     const base = requireTable(this.ctx, req.table);
     if (req.sort.length === 0 && base.primaryKey.length === 0) {
       const built = buildSelect(this.ctx, req);
       yield* chunked(await this.run(pool, built.sql, built.params), built);
       return;
     }
+
     // limit/offset pages need a total order; the primary key tiebreaks whatever the caller sorted by
     const tiebreak = base.primaryKey
       .filter((field) => !req.sort.some((sort) => sort.field === field))
@@ -236,7 +239,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     );
   }
 
-  // sql COUNT(*) is exact, so the null "source only approximates" answer never occurs here
+  // COUNT(*) is exact, so never null
   override async exactCount(req: CountExactRequest): Promise<number> {
     return await this.#probe(req.credentials, (run) => probes.countExact(this.ctx, run, req));
   }
@@ -265,4 +268,6 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       renderAggregateRows(await this.run(pool, built.sql, built.params), built.columns),
     );
   }
+
+  // #endregion
 }

@@ -30,7 +30,7 @@ export function connectorRoutes(
           set.status = error.status;
           return error.body();
         }
-        // the envelope the caller gets says nothing; the operator needs the real thing
+        // the envelope hides it; the operator log gets the real error
         console.error(`[${connector.slug}] ${code}`, error);
         const status = code === "PARSE" ? 400 : 500;
         set.status = status;
@@ -52,7 +52,7 @@ export function connectorRoutes(
           await withTimeout(req.timeoutMs, () => connector.check(req));
         } catch (error) {
           if (error instanceof ConnectorError) throw error;
-          // the one message meant for the tenant: it is what the connect form shows them
+          // check_failed's message reaches the tenant verbatim
           set.status = 400;
           return {
             error: {
@@ -73,7 +73,6 @@ export function connectorRoutes(
       .post("/query", async ({ body, headers }) => {
         assertBearer(headers.authorization);
         const req = parseBody(NativeQueryRequest, body);
-        // one body, so the batches are drained; the request's own limit bounds the read
         return await withTimeout(req.timeoutMs, async () => ({
           rows: await drainRows(connector.query(req), req.limit),
         }));

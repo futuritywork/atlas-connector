@@ -1,7 +1,6 @@
 // lark base (bitable) → atlas: tables → atlas tables, fields → columns, records/search → rows.
-// the tenant's app credentials and base app_token ride on every request, so one process serves
-// any number of bases and keeps none of them. lark evaluates the pushable slice of a filter;
-// applyFilters re-runs the full set locally so every advertised op is honored either way.
+// the tenant's app credentials and app_token arrive on every request, so one process serves any number of bases and keeps none of them.
+// lark evaluates the pushable slice of a filter; applyFilters re-runs the full set, so every advertised op holds.
 
 import {
   applyFilters,
@@ -44,7 +43,7 @@ const META_CACHE_MS = 60_000;
 const SAMPLE_PAGE_SIZE = 20;
 const SAMPLES_PER_FIELD = 5;
 
-// the slice of a wire request the scan helpers read; query, count, and every probe satisfy it
+// the slice of a wire request the scan helpers read
 type QueryShape = {
   table: string;
   and: Filter[];
@@ -62,12 +61,10 @@ type BaseMeta = {
   fields: Map<string, Map<string, LarkField>>;
 };
 
-// nothing is held between calls: the client is built from the request's own credentials
 function clientFor(credentials: Credentials): LarkClient {
   return new LarkClient(larkCredentials(credentials));
 }
 
-// the columns a fetch must carry: projection plus every filter and sort operand
 function neededColumns(req: QueryShape): Set<string> {
   const needed = new Set(req.fields);
   for (const filter of req.and) needed.add(filter.field);
@@ -90,11 +87,18 @@ function toRow(record: LarkRecord, columns: Iterable<string>, fieldsByName: Map<
 }
 
 function compareCell(a: AtlasValue, b: AtlasValue, type: AtlasType | undefined): number {
-  if (a === null || b === null) return a === null && b === null ? 0 : a === null ? 1 : -1; // nulls last (asc)
+  // nulls last (asc)
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+
   if (type === "number" || type === "decimal") {
     const left = Number(a);
     const right = Number(b);
-    if (Number.isFinite(left) && Number.isFinite(right)) return left < right ? -1 : left > right ? 1 : 0;
+    if (Number.isFinite(left) && Number.isFinite(right)) {
+      if (left === right) return 0;
+      return left < right ? -1 : 1;
+    }
   }
   return byteOrderCompare(String(a), String(b));
 }
@@ -121,8 +125,7 @@ function project(rows: SourceRow[], fields: string[]): SourceRow[] {
 export class LarkConnector extends AtlasConnector {
   readonly slug = "lark-base";
 
-  // keyed by the credential set: a tenant who cannot open the base must not read its
-  // tables from another tenant's cache
+  // keyed by credential set: one tenant must never read tables from another's cache
   private readonly metaByCredential = new Map<string, BaseMeta>();
 
   capability() {
@@ -133,14 +136,14 @@ export class LarkConnector extends AtlasConnector {
     await clientFor(req.credentials).checkAccess(makeDeadline(req.timeoutMs));
   }
 
-  // ---- metadata ------------------------------------------------------------
+  // #region metadata
 
   private async meta(client: LarkClient, deadline: Deadline): Promise<BaseMeta> {
     const cached = this.metaByCredential.get(client.cacheKey);
     if (cached && Date.now() - cached.at < META_CACHE_MS) return cached;
     const tables = new Map((await client.listTables(deadline)).map((table) => [table.name, table]));
     const now = Date.now();
-    // one entry per credential set, so expired ones have to be swept or they never leave
+    // swept here, or expired entries never leave
     for (const [key, entry] of this.metaByCredential) {
       if (now - entry.at >= META_CACHE_MS) this.metaByCredential.delete(key);
     }
@@ -173,15 +176,15 @@ export class LarkConnector extends AtlasConnector {
     return byName;
   }
 
-  // ---- row production ------------------------------------------------------
+  // #endregion
 
-  // scan the table under the pushable slice of and[]; rows carry exactly the needed columns
+  // #region row production
+
+  // pushes the pushable slice of and[]; rows carry exactly the needed columns
   private async *scan(client: LarkClient, req: QueryShape, deadline: Deadline): AsyncIterable<SourceRow[]> {
     if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; atlas joins locally");
     const { meta, table } = await this.resolveTable(client, req.table, deadline);
     const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
-    // a filter on a field this base does not have must 422: applyFilters would drop it silently
-    // and the unfiltered rows would come back looking like matches
     assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
     const columns = neededColumns(req);
     const realFields = [...columns].filter((column) => fieldsByName.has(column));
@@ -202,7 +205,9 @@ export class LarkConnector extends AtlasConnector {
     }
   }
 
-  // ---- the protocol --------------------------------------------------------
+  // #endregion
+
+  // #region protocol
 
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const client = clientFor(req.credentials);
@@ -213,7 +218,8 @@ export class LarkConnector extends AtlasConnector {
       const rows: SourceRow[] = [];
       for await (const batch of this.scanFiltered(client, req, deadline)) rows.push(...batch);
       sortRows(rows, req.sort, req.fieldTypes);
-      const window = rows.slice(offset, req.limit !== undefined ? offset + req.limit : undefined);
+      const end = req.limit !== undefined ? offset + req.limit : undefined;
+      const window = rows.slice(offset, end);
       for (let i = 0; i < window.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
         yield project(window.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
       }
@@ -231,14 +237,20 @@ export class LarkConnector extends AtlasConnector {
   async count(req: CountRequest): Promise<number> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
-    // scan-and-tally: lark's filtered `total` is untested against the residual semantics
-    const shape: QueryShape = { table: req.table, and: req.and, or: req.or, fields: [], fieldTypes: req.fieldTypes };
+    // scan-and-tally: lark's filtered total is untested against the residual filters
+    const shape: QueryShape = {
+      table: req.table,
+      and: req.and,
+      or: req.or,
+      fields: [],
+      fieldTypes: req.fieldTypes,
+    };
     let count = 0;
     for await (const batch of this.scanFiltered(client, shape, deadline)) count += batch.length;
     return count;
   }
 
-  // every search page carries the table's total, so the base class's full scan is never needed
+  // every search page carries the table's total
   override async exactCount(req: CountExactRequest): Promise<number | null> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
@@ -312,4 +324,6 @@ export class LarkConnector extends AtlasConnector {
 
     return { tables: answers, ...(warnings.length > 0 ? { warnings } : {}) };
   }
+
+  // #endregion
 }

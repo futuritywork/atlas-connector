@@ -57,7 +57,7 @@ function runnerOf(results: Row[][]) {
   return { run, calls };
 }
 
-// the probe sql reads only the request's table and columns; the pool already holds the credentials
+// credentials are the pool's concern, not the probe sql's
 const deadline = { credentials: {}, timeoutMs: 1000 };
 
 describe("probeColumns", () => {

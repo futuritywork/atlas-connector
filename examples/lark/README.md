@@ -22,8 +22,9 @@ curl http://localhost:4100/.well-known/futurity/atlas.json
 ```
 
 the doc's `credentialSchema` is what atlas renders in the connect form. each entry's
-`placeholder` fills the empty input and its `help` is markdown shown underneath, naming the
-console page the value is copied from:
+`placeholder` fills the empty input and its `help` is markdown shown between the label and the input, naming the
+console page the value is copied from. every lark field is `required: true`; a field marked
+`required: false` may be left blank and then arrives with its key absent:
 
 ```json
 [
@@ -31,6 +32,7 @@ console page the value is copied from:
     "key": "appId",
     "label": "App ID",
     "type": "text",
+    "required": true,
     "placeholder": "cli_XXXXXXXXXXXXXXXX",
     "help": "Lark Developer Console → your app → **Credentials & Basic Info**, the field labelled **App ID**. Your apps are listed at [open.larksuite.com/app](https://open.larksuite.com/app)."
   },
@@ -38,12 +40,14 @@ console page the value is copied from:
     "key": "appSecret",
     "label": "App secret",
     "type": "password",
+    "required": true,
     "help": "The **App Secret** on that same **Credentials & Basic Info** page of the [Lark Developer Console](https://open.larksuite.com/app). The app also needs the `bitable:app:readonly` permission."
   },
   {
     "key": "appToken",
     "label": "Base app token",
     "type": "text",
+    "required": true,
     "placeholder": "bascnXXXXXXXXXXXXXXXXXXXXXX",
     "help": "The id in the base's URL, `https://<tenant>.larksuite.com/base/<app_token>`. Add the app to that base as a collaborator first, or it cannot read the tables."
   }

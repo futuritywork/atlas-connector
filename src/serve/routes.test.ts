@@ -31,7 +31,7 @@ const DOC: AtlasJson = {
     probeConcurrency: 4,
     cheapProbes: false,
   },
-  credentialSchema: [{ key: "apiKey", label: "API key", type: "password" }],
+  credentialSchema: [{ key: "apiKey", label: "API key", type: "password", required: true }],
   endpoints: ["aggregate"],
 };
 

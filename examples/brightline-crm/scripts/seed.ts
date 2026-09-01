@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 import { CONFIG } from "../src/env";
 
-// the seed's own target; the connector itself takes the url from each request's credentials
+// the seed's target only; the connector reads its url off each request
 const DATABASE_URL =
   process.env.CONNECTOR_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5434/brightline";
