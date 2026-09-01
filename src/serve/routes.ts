@@ -25,10 +25,16 @@ export function connectorRoutes(
   return (
     new Elysia()
       // map thrown errors to the wire envelope; sanitized 500 / 400, never a raw stack
-      .onError(({ code, error, set }) => {
+      .onError(({ code, error, set, request }) => {
         if (error instanceof ConnectorError) {
           set.status = error.status;
           return error.body();
+        }
+        // scanners hit unknown paths constantly; one plain line, no stack
+        if (code === "NOT_FOUND") {
+          console.warn(`[${connector.slug}] 404 ${request.method} ${new URL(request.url).pathname}`);
+          set.status = 404;
+          return { error: { code: "not_found", message: "no such route" } };
         }
         // the envelope hides it; the operator log gets the real error
         console.error(`[${connector.slug}] ${code}`, error);

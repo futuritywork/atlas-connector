@@ -310,6 +310,18 @@ describe("errors", () => {
     logged.mockRestore();
   });
 
+  test("an unknown path is a quiet 404: one warn line, no stack", async () => {
+    const warned = spyOn(console, "warn").mockImplementation(() => {});
+    const errored = spyOn(console, "error").mockImplementation(() => {});
+    const response = await post("/nope", {});
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: { code: "not_found", message: "no such route" } });
+    expect(warned.mock.calls.length).toBe(1);
+    expect(errored.mock.calls.length).toBe(0);
+    warned.mockRestore();
+    errored.mockRestore();
+  });
+
   test("the request's own timeoutMs is honored with a 408", async () => {
     const response = await post("/query", { ...QUERY, table: "slow", timeoutMs: 30 });
     expect(response.status).toBe(408);
