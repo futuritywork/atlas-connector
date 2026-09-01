@@ -1,18 +1,28 @@
 import {
   applyFilters,
+  assertKnownFields,
   AtlasConnector,
-  columnCountsFromValues,
-  grainFromValues,
-  linkFromValues,
+  unknownEntity,
+  type CheckRequest,
   type CountRequest,
   type DiscoveryAnswer,
   type DiscoveryRequest,
   type NativeQueryRequest,
-  type NativeQueryStreamRequest,
-  type SampleKeyValuesRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
+
+// YOUR CODE HERE: the fields your api exposes per table. discovery answers from the same
+// place, so "a field Atlas may filter on" and "a field you declared" stay the same set.
+const FIELDS: Record<string, string[]> = {
+  companies: ["id", "name", "created_at"],
+};
+
+function fieldsOf(table: string): string[] {
+  const fields = FIELDS[table];
+  if (!fields) throw unknownEntity(`unknown table "${table}"`);
+  return fields;
+}
 
 export class MyConnector extends AtlasConnector {
   readonly slug = "my-atlas-connector";
@@ -21,37 +31,31 @@ export class MyConnector extends AtlasConnector {
     return ATLAS_JSON;
   }
 
-  // YOUR CODE HERE: map your API's metadata to tables/fields. return { tables, warnings? }.
-  async discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    throw new Error("implement discovery");
+  // YOUR CODE HERE: the cheapest upstream call that proves req.credentials: a token mint,
+  // a whoami, a 1-row read. throw with a message written for the tenant: they see it verbatim.
+  async check(req: CheckRequest): Promise<void> {
+    throw new Error("implement check");
   }
 
-  // YOUR CODE HERE: fetch rows; push the filters your API can evaluate, applyFilters() the rest;
-  // project req.fields (+ join aliases); honor sort/limit/offset. capability.ts may only advertise
-  // ops one of those two paths actually honors.
-  async query(req: NativeQueryRequest): Promise<SourceRow[]> {
+  // YOUR CODE HERE: fetch rows for req.credentials; push what your api can filter, applyFilters()
+  // the rest; project req.fields; honor sort/limit/offset; yield batches of ≤5000 rows.
+  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+    // a filter you cannot answer must 422 HERE: a row that skipped a filter reads as a row that matched it
+    assertKnownFields(req, fieldsOf(req.table));
     throw new Error("implement query");
   }
 
-  // YOUR CODE HERE: yield batches (≤5000 rows each) as your pagination delivers them;
-  // serve() owns heartbeats and the {end:1} terminator.
-  async *queryStream(req: NativeQueryStreamRequest): AsyncIterable<SourceRow[]> {
-    throw new Error("implement queryStream");
-  }
-
-  // YOUR CODE HERE: how many rows match req.and/req.or (your count endpoint, or tally queryStream).
+  // YOUR CODE HERE: how many rows match req.and/req.or (your count endpoint, or tally query()).
   async count(req: CountRequest): Promise<number> {
+    assertKnownFields(req, fieldsOf(req.table));
     throw new Error("implement count");
   }
 
-  // YOUR CODE HERE: sorted distinct head of a column, as text (numeric by magnitude, text by bytes).
-  async sampleKeyValues(req: SampleKeyValuesRequest): Promise<string[]> {
-    throw new Error("implement sampleKeyValues");
+  // YOUR CODE HERE: map your api's metadata to tables/fields. return { tables, warnings? }.
+  async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+    throw new Error("implement discover");
   }
 
-  // the base class answers wire-legal null for countExact/probeColumns/probeLink/probeGrain and
-  // declines aggregate with a 204 — override only what you implement. the kit does the probe math
-  // over fetched values: probeColumns → columnCountsFromValues({ column: values, ... }),
-  // probeLink → linkFromValues(fromValues, toValues), probeGrain → grainFromValues(values).
-  // if you implement aggregate(), add "aggregate" to endpoints in capability.ts too.
+  // profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer
+  // by scanning through query(); override one only where your api can do that math cheaper.
 }

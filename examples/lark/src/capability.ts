@@ -17,5 +17,11 @@ export const ATLAS_JSON: AtlasJson = {
     probeConcurrency: 2, // bitable rate limit is 20 rps app-wide; probes are full scans
     cheapProbes: false,
   },
+  // the app credentials and the base they open; one connector serves every tenant that types a set
+  credentialSchema: [
+    { key: "appId", label: "App ID", type: "text" },
+    { key: "appSecret", label: "App secret", type: "password" },
+    { key: "appToken", label: "Base app token", type: "text" },
+  ],
   endpoints: [], // aggregate declined: bitable has no server-side group-by
 };

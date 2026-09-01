@@ -1,22 +1,22 @@
 # lark base → atlas connector: feasibility + skeleton
 
-date: 2026-08-30. api facts verified against open.larksuite.com / open.feishu.cn docs;
-nothing here is guessed, but nothing has run against a live base yet either.
+date: 2026-08-30. api facts verified against open.larksuite.com / open.feishu.cn docs,
+then against two live seeded bases through one running connector.
 
 ## verdict
 
 lark base (bitable) is a good atlas connector target — the best queryable surface in the
 lark suite by far. it is genuinely tabular: base (app_token) → tables (table_id) → records
 (record_id) with typed fields, a search api with server-side filtering + sorting + pagination
-+ a total count, and a metadata api that enumerates tables and fields. one connector instance
-maps 1:1 to one base, which matches atlas's one-source-per-connector shape.
++ a total count, and a metadata api that enumerates tables and fields. a base is named by an
+`app_token` the tenant sends on every request, so one running connector serves any number of them.
 
 what's clean:
 
 - `record_id` is a real, source-enforced primary key on every table → `enforcesDeclaredKeys: true`.
 - link fields (`singleLink`/`duplexLink`) carry `property.table_id` → honest foreign keys to the
   target table's `record_id`, so atlas gets a join graph for free at discovery.
-- search response carries `total` → cheap `countExact`.
+- search response carries `total` → cheap `exactCount`.
 - field metadata is rich (type code + ui_type + options), so discovery needs no sampling
   heuristics to type columns.
 
@@ -63,10 +63,10 @@ what's awkward:
 | 13   | phone           | string   | raw string                                     |
 | 15   | url             | string   | `.link` (fallback `.text`)                     |
 | 17   | attachment      | json     | json text                                      |
-| 18   | single link     | array    | json text of `link_record_ids`                 |
+| 18   | single link     | string   | first of `link_record_ids` (the join key)      |
 | 19   | lookup          | json     | unwrap `{type,value}`, segments → text         |
 | 20   | formula         | json     | unwrap `{type,value}`, segments → text         |
-| 21   | duplex link     | array    | json text of `link_record_ids`                 |
+| 21   | duplex link     | string   | first of `link_record_ids` (the join key)      |
 | 22   | location        | json     | json text                                      |
 | 23   | group chat      | json     | json text                                      |
 | 1001 | created time    | datetime | ms epoch → iso                                 |
@@ -126,21 +126,21 @@ the older `GET …/records` (formula-string filter) is deprecated in favor of se
 
 ## what's built (all typechecks: `bun run check` clean; boots and serves)
 
-- `src/lark-api.ts` — tenant-token cache (5 min slack, expired-code retry), enveloped
+- `src/lark-api.ts`: tenant-token cache (5 min slack, expired-code retry), enveloped
   request helper (`{code,msg,data}`), pagination loops for tables/fields/search, `total`.
-- `src/field-map.ts` — the type table + read-side flattener above.
-- `src/pushdown.ts` — atlas `and[]` → lark conditions per the operator table; or-blocks,
+- `src/field-map.ts`: the type table + read-side flattener above.
+- `src/pushdown.ts`: atlas `and[]` → lark conditions per the operator table; or-blocks,
   overflow past 50, unknown fields, and unsafe types simply stay local.
-- `src/connector.ts` — `LarkConnector extends AtlasConnector`, all ten methods:
-  discovery (tables + fields + samples + rowCount + link-field foreign keys + record_id pk),
-  query (scan → applyFilters → in-memory sort → offset/limit → projection), queryStream
-  (streams when unordered, materializes for sort/offset), count (scan-tally),
-  sampleKeyValues (distinct head, numeric-by-magnitude or byte order), countExact (`total`),
-  probeColumns/probeLink/probeGrain via the sdk kit math, aggregate left declining.
+- `src/connector.ts`: `LarkConnector extends AtlasConnector`; check (token mint + one table
+  read), discover (tables + fields + samples + rowCount + link-field foreign keys + record_id
+  pk), query (scan → applyFilters → projection, streaming when unordered and materialized for
+  sort/offset), count (scan-tally), exactCount (`total`). the profiling methods and aggregate
+  are left to the base class, which scans through query() and declines aggregate.
 - `src/capability.ts`, `src/index.ts` (serve), `src/env.ts`, `src/byte-order.ts`.
 
-verified locally without creds: boot, `/.well-known/futurity/atlas.json` parses and serves,
-bearer guard 401s, upstream failures come back as wire-legal error envelopes.
+verified live against two seeded bases on one process: check passes per tenant and fails on a
+wrong secret or app_token, discovery returns each base's own tables, queries and probes answer,
+bearer guard 401s, and upstream failures come back as wire-legal error envelopes.
 
 ## to take it live
 
@@ -149,7 +149,8 @@ bearer guard 401s, upstream failures come back as wire-legal error envelopes.
 2. add scopes: `bitable:app:readonly` (simplest superset), publish/approve the app version.
 3. create a base, note the `app_token` from its url (`…/base/<app_token>?table=…`), and add
    the app as a collaborator of that base.
-4. fill `.env`, `bun run start`, then hit discovery and query with a real table.
+4. `bun run start`, then send `credentials` (app id, app secret, app token) to `/check` and
+   on to discovery and query.
 5. live-test checklist (things the docs could not settle):
    - filtered search `total`: does it count matches? if yes, count can stop scanning when
      filters fully push.

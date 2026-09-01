@@ -1,5 +1,5 @@
 import { SQL } from "bun";
-import { CONNECTOR_LIMITS, type NativeQueryStreamRequest } from "@futurity/atlas-connector";
+import { CONNECTOR_LIMITS, type Credentials, type NativeQueryRequest } from "@futurity/atlas-connector";
 import { type Row, SqlConnector } from "@futurity/atlas-connector/sql";
 import { catalog } from "./catalog";
 import { CONFIG } from "./env";
@@ -12,31 +12,41 @@ function pinnedUrl(url: string): string {
   return parsed.toString();
 }
 
-export class BrightlineConnector extends SqlConnector {
+export class BrightlineConnector extends SqlConnector<SQL> {
   readonly slug = CONFIG.slug;
   readonly catalog = catalog;
   readonly schema = CONFIG.schema;
   // keys come only from real pg constraints (PKs + owners.email UNIQUE)
   override readonly enforcesDeclaredKeys = true;
 
-  private readonly db = new SQL(pinnedUrl(CONFIG.databaseUrl));
-
-  // the only path SQL text reaches pg on; values never travel inside the statement string
-  async run(sql: string, params: unknown[]): Promise<Row[]> {
-    return (await this.db.unsafe(sql, params)) as Row[];
+  // the tenant's own database, from the credentials on the request; the sdk opens one pool
+  // per credential set and closes it when the cache evicts it
+  protected override async openPool(credentials: Credentials): Promise<SQL> {
+    if (!credentials.databaseUrl) throw new Error("databaseUrl is required");
+    return new SQL(pinnedUrl(credentials.databaseUrl));
   }
 
-  // real pg cursor instead of limit/offset windows; framing, heartbeat, and both stream
-  // deadlines are serve()'s job — this only produces raw batches and cleans up its connection
+  protected override async closePool(pool: SQL): Promise<void> {
+    await pool.close();
+  }
+
+  // the only path SQL text reaches pg on; values never travel inside the statement string
+  async run(pool: SQL, sql: string, params: unknown[]): Promise<Row[]> {
+    return (await pool.unsafe(sql, params)) as Row[];
+  }
+
+  // real pg cursor instead of limit/offset windows, on every read: framing, heartbeats, and
+  // the stream deadlines are serve()'s job, so this only produces raw batches and cleans up
   protected override async *streamBatches(
+    pool: SQL,
     built: { sql: string; params: unknown[] },
-    req: NativeQueryStreamRequest,
+    req: NativeQueryRequest,
   ): AsyncIterable<Row[]> {
     const cursor = `"__brightline_stream"`;
-    const reserved = await this.db.reserve();
+    const reserved = await pool.reserve();
     try {
       await reserved.unsafe("BEGIN");
-      await reserved.unsafe(`SET LOCAL statement_timeout = ${Math.ceil(req.maxTimeoutMs)}`);
+      await reserved.unsafe(`SET LOCAL statement_timeout = ${Math.ceil(req.timeoutMs)}`);
       await reserved.unsafe(`DECLARE ${cursor} NO SCROLL CURSOR FOR ${built.sql}`, built.params);
       for (;;) {
         const rows = (await reserved.unsafe(

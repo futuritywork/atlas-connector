@@ -1,18 +1,39 @@
-// thin client for the lark open platform: tenant-token auth + the three bitable
-// endpoints this connector uses (list tables, list fields, search records)
+// thin client for the lark open platform: tenant-token auth + the bitable endpoints this
+// connector reads. one instance per request, holding that request's tenant credentials.
 
-import { timeout as timeoutError, unknownEntity } from "@futurity/atlas-connector";
+import { createHash } from "node:crypto";
+import { badRequest, ConnectorError, timeout as timeoutError, unknownEntity } from "@futurity/atlas-connector";
+import type { Credentials } from "@futurity/atlas-connector";
+
+// the international tenant; a base on feishu.cn changes this one line
+const DOMAIN = "https://open.larksuite.com";
 
 const TOKEN_SLACK_MS = 5 * 60 * 1000;
 // lark app_access_token invalid / tenant token expired: refetch once and retry
 const TOKEN_EXPIRED_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
 
-export type LarkClientConfig = {
-  domain: string;
+// what the tenant types into the connect form, as the connector reads it back
+type LarkCredentials = {
   appId: string;
   appSecret: string;
   appToken: string;
 };
+
+const REQUIRED_KEYS = ["appId", "appSecret", "appToken"] as const;
+
+export function larkCredentials(credentials: Credentials): LarkCredentials {
+  const missing = REQUIRED_KEYS.filter((key) => !credentials[key]);
+  if (missing.length > 0) throw badRequest(`missing credentials: ${missing.join(", ")}`);
+  return { appId: credentials.appId, appSecret: credentials.appSecret, appToken: credentials.appToken };
+}
+
+// tenant tokens last ~7200s and belong to the app, not the base, so every tenant sharing an
+// app shares one mint. the key is a digest: a secret has no business sitting in a map key
+const tokens = new Map<string, { value: string; expiresAt: number }>();
+
+function tokenKey(credentials: LarkCredentials): string {
+  return createHash("sha256").update(`${credentials.appId}:${credentials.appSecret}`).digest("hex");
+}
 
 export type LarkTable = { table_id: string; name: string };
 
@@ -52,29 +73,35 @@ export function makeDeadline(timeoutMs: number): Deadline {
 }
 
 export class LarkClient {
-  private token: { value: string; expiresAt: number } | null = null;
+  constructor(private readonly credentials: LarkCredentials) {}
 
-  constructor(private readonly config: LarkClientConfig) {}
+  // the whole credential set as one opaque key, so a cache entry can never answer another set
+  get cacheKey(): string {
+    const { appId, appSecret, appToken } = this.credentials;
+    return createHash("sha256").update(JSON.stringify([appId, appSecret, appToken])).digest("hex");
+  }
 
   // POST /auth/v3/tenant_access_token/internal → { tenant_access_token, expire } (expire ≈ 7200s)
   private async tenantToken(deadline: Deadline): Promise<string> {
-    if (this.token && Date.now() < this.token.expiresAt) return this.token.value;
+    const key = tokenKey(this.credentials);
+    const cached = tokens.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.value;
     deadline.check();
-    const res = await fetch(`${this.config.domain}/open-apis/auth/v3/tenant_access_token/internal`, {
+    const res = await fetch(`${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ app_id: this.config.appId, app_secret: this.config.appSecret }),
+      body: JSON.stringify({ app_id: this.credentials.appId, app_secret: this.credentials.appSecret }),
       signal: AbortSignal.timeout(deadline.remainingMs()),
     });
     const body = (await res.json()) as { code: number; msg: string; tenant_access_token?: string; expire?: number };
     if (body.code !== 0 || !body.tenant_access_token) {
       throw new Error(`lark tenant_access_token failed: code=${body.code} ${body.msg}`);
     }
-    this.token = {
+    tokens.set(key, {
       value: body.tenant_access_token,
       expiresAt: Date.now() + (body.expire ?? 7200) * 1000 - TOKEN_SLACK_MS,
-    };
-    return this.token.value;
+    });
+    return body.tenant_access_token;
   }
 
   private async request<T>(
@@ -86,7 +113,7 @@ export class LarkClient {
   ): Promise<T> {
     const token = await this.tenantToken(deadline);
     deadline.check();
-    const url = new URL(`${this.config.domain}${path}`);
+    const url = new URL(`${DOMAIN}${path}`);
     for (const [key, value] of Object.entries(opts.query ?? {})) url.searchParams.set(key, value);
     const res = await fetch(url, {
       method,
@@ -100,7 +127,7 @@ export class LarkClient {
     const envelope = (await res.json()) as { code: number; msg: string; data?: T };
     if (envelope.code !== 0) {
       if (TOKEN_EXPIRED_CODES.has(envelope.code) && !retried) {
-        this.token = null;
+        tokens.delete(tokenKey(this.credentials));
         return await this.request(method, path, deadline, opts, true);
       }
       if (res.status === 404 || envelope.code === 91402) {
@@ -109,6 +136,22 @@ export class LarkClient {
       throw new Error(`lark ${path}: code=${envelope.code} ${envelope.msg}`);
     }
     return envelope.data as T;
+  }
+
+  // the credential proof: the mint answers for app_id/app_secret, the read for app_token.
+  // every failure leaves as a plain Error, because /check's message is written for the tenant
+  async checkAccess(deadline: Deadline): Promise<void> {
+    try {
+      await this.request<{ items?: LarkTable[] }>("GET", this.tablesPath(), deadline, {
+        query: { page_size: "1" },
+      });
+    } catch (error) {
+      throw error instanceof ConnectorError ? new Error(error.message) : error;
+    }
+  }
+
+  private tablesPath(): string {
+    return `/open-apis/bitable/v1/apps/${this.credentials.appToken}/tables`;
   }
 
   // GET pagination: follow page_token until has_more clears; metadata pages cap at 100
@@ -127,14 +170,11 @@ export class LarkClient {
   }
 
   async listTables(deadline: Deadline): Promise<LarkTable[]> {
-    return await this.listAll<LarkTable>(`/open-apis/bitable/v1/apps/${this.config.appToken}/tables`, deadline);
+    return await this.listAll<LarkTable>(this.tablesPath(), deadline);
   }
 
   async listFields(tableId: string, deadline: Deadline): Promise<LarkField[]> {
-    return await this.listAll<LarkField>(
-      `/open-apis/bitable/v1/apps/${this.config.appToken}/tables/${tableId}/fields`,
-      deadline,
-    );
+    return await this.listAll<LarkField>(`${this.tablesPath()}/${tableId}/fields`, deadline);
   }
 
   // POST .../records/search — one page; conditions are AND-conjoined; page_size max 500
@@ -154,18 +194,13 @@ export class LarkClient {
     if (opts.conditions && opts.conditions.length > 0) {
       body.filter = { conjunction: "and", conditions: opts.conditions };
     }
-    return await this.request<SearchPage>(
-      "POST",
-      `/open-apis/bitable/v1/apps/${this.config.appToken}/tables/${tableId}/records/search`,
-      deadline,
-      {
-        query: {
-          page_size: String(opts.pageSize ?? 500),
-          ...(opts.pageToken ? { page_token: opts.pageToken } : {}),
-        },
-        body,
+    return await this.request<SearchPage>("POST", `${this.tablesPath()}/${tableId}/records/search`, deadline, {
+      query: {
+        page_size: String(opts.pageSize ?? 500),
+        ...(opts.pageToken ? { page_token: opts.pageToken } : {}),
       },
-    );
+      body,
+    });
   }
 
   // full scan of a table under the given pushdown; caps nothing — callers own limits

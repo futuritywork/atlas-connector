@@ -7,4 +7,4 @@ const { url } = serve(new BrightlineConnector(), {
   port: CONFIG.port,
 });
 
-console.log(`brightline connector on ${url} (schema '${CONFIG.schema}', db from CONNECTOR_DATABASE_URL)`);
+console.log(`brightline connector on ${url} (schema '${CONFIG.schema}'; each request brings its own database url)`);

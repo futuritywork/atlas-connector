@@ -6,7 +6,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@futurity/atlas-connector": "file:../..",

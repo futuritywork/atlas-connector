@@ -28,6 +28,8 @@ export const LARK_TYPE = {
   autoNumber: 1005,
 } as const;
 
+// number cells are doubles and date cells are epoch-ms instants, so they cross as number and
+// datetime; bitable stores nothing that is exact-decimal or day-only
 const ATLAS_TYPE_BY_LARK: Record<number, AtlasType> = {
   [LARK_TYPE.text]: "string",
   [LARK_TYPE.number]: "number",
@@ -39,10 +41,10 @@ const ATLAS_TYPE_BY_LARK: Record<number, AtlasType> = {
   [LARK_TYPE.phone]: "string",
   [LARK_TYPE.url]: "string",
   [LARK_TYPE.attachment]: "json",
-  [LARK_TYPE.singleLink]: "array",
+  [LARK_TYPE.singleLink]: "string",
   [LARK_TYPE.lookup]: "json",
   [LARK_TYPE.formula]: "json",
-  [LARK_TYPE.duplexLink]: "array",
+  [LARK_TYPE.duplexLink]: "string",
   [LARK_TYPE.location]: "json",
   [LARK_TYPE.groupChat]: "json",
   [LARK_TYPE.createdTime]: "datetime",
@@ -106,11 +108,10 @@ export function flattenValue(raw: unknown, larkType: number): AtlasValue {
     }
     case LARK_TYPE.singleLink:
     case LARK_TYPE.duplexLink: {
-      // link cells read as { link_record_ids: [...], ... }; the ids are the joinable part
-      if (raw && typeof raw === "object" && "link_record_ids" in raw) {
-        return JSON.stringify((raw as { link_record_ids: unknown }).link_record_ids);
-      }
-      return JSON.stringify(raw);
+      // link cells read as { link_record_ids: [...] }. the first id crosses as text, which is
+      // what makes the field joinable against the target table's record_id; extra ids are dropped
+      const ids = raw && typeof raw === "object" && "link_record_ids" in raw ? raw.link_record_ids : raw;
+      return Array.isArray(ids) && ids.length > 0 ? String(ids[0]) : null;
     }
     case LARK_TYPE.formula:
     case LARK_TYPE.lookup: {

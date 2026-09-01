@@ -1,6 +1,11 @@
 import { SQL } from "bun";
 import { CONFIG } from "../src/env";
 
+// the seed's own target; the connector itself takes the url from each request's credentials
+const DATABASE_URL =
+  process.env.CONNECTOR_DATABASE_URL ??
+  "postgres://postgres:postgres@localhost:5434/brightline";
+
 // #region deterministic PRNG — same seed always yields the same probe numbers
 function mulberry32(seed: number): () => number {
   let a = seed;
@@ -455,9 +460,9 @@ async function insertRows(
 }
 
 async function ensureDatabase(): Promise<void> {
-  const target = new URL(CONFIG.databaseUrl);
+  const target = new URL(DATABASE_URL);
   const dbName = target.pathname.replace(/^\//, "");
-  const admin = new URL(CONFIG.databaseUrl);
+  const admin = new URL(DATABASE_URL);
   admin.pathname = "/postgres";
   const sql = new SQL(admin.toString());
   try {
@@ -473,7 +478,7 @@ async function ensureDatabase(): Promise<void> {
 
 async function main(): Promise<void> {
   await ensureDatabase();
-  const sql = new SQL(CONFIG.databaseUrl);
+  const sql = new SQL(DATABASE_URL);
   try {
     await sql.unsafe(DDL);
     await insertRows(

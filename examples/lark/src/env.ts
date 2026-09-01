@@ -4,11 +4,9 @@ function required(name: string): string {
   return value;
 }
 
+// the whole server-side configuration: a port and the bearer atlas presents.
+// lark credentials are never here; they arrive on each request from the tenant.
 export const CONFIG = {
   port: Number(process.env.PORT ?? process.env.CONNECTOR_PORT ?? 4100),
   bearerToken: required("ATLAS_CONNECTOR_TOKEN"),
-  appId: required("LARK_APP_ID"),
-  appSecret: required("LARK_APP_SECRET"),
-  appToken: required("LARK_APP_TOKEN"),
-  domain: process.env.LARK_DOMAIN ?? "https://open.larksuite.com",
 } as const;

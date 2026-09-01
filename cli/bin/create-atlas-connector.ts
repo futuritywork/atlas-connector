@@ -148,12 +148,12 @@ if (!name || !kind) {
           {
             value: "sql",
             label: "a sql database",
-            hint: "extend SqlConnector: a catalog + one run(sql, params)",
+            hint: "extend SqlConnector: a catalog + openPool/run",
           },
           {
             value: "rest",
             label: "a rest or erp api",
-            hint: "extend AtlasConnector: five mandatory methods + an authored capability",
+            hint: "extend AtlasConnector: check/query/count/discover + an authored capability",
           },
         ],
       }),
@@ -197,7 +197,7 @@ pinSdkVersion(dest);
 
 const fillIn =
   kind === "sql"
-    ? "declare your tables in src/catalog.ts, then connect your database in src/connector.ts run()"
+    ? "declare your tables in src/catalog.ts; src/connector.ts already opens a postgres pool from the tenant's databaseUrl"
     : "fill in the YOUR CODE HERE methods in src/connector.ts; earn each flag in src/capability.ts";
 
 process.stdout.write(`Scaffolded '${slug}' (${kind}) at ${dest}\n\n`);

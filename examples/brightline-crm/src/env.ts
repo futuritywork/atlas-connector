@@ -1,10 +1,7 @@
-// the connector's whole configuration surface; every value has a local-docker default so
-// `bun run start` works with no env
+// the connector's whole configuration surface. the database url is not here: it is the
+// tenant's credential, sent on every request and never stored
 export const CONFIG = {
   port: Number(process.env.CONNECTOR_PORT ?? 4100),
-  databaseUrl:
-    process.env.CONNECTOR_DATABASE_URL ??
-    "postgres://postgres:postgres@localhost:5434/brightline",
   schema: process.env.CONNECTOR_SCHEMA ?? "crm",
   // the protocol requires a bearer of at least 32 characters, so the dev default meets it too
   token:

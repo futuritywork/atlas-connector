@@ -9,7 +9,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@futurity/atlas-connector": "^0.1.0",
+    "@futurity/atlas-connector": "^0.2.0",
     "elysia": "^1.4.25",
     "zod": "^4.1.13"
   },

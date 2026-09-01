@@ -1,27 +1,34 @@
 # my-atlas-connector
 
 An Atlas external connector backed by a REST/ERP API. You extend
-`AtlasConnector` and write the ten protocol methods yourself — five are
-mandatory, five default to a wire-legal "not implemented". `serve()` owns auth,
-timeouts, NDJSON framing, and the error envelope; your methods receive the
-parsed request and return plain data.
+`AtlasConnector` and write four methods; the profiling five derive themselves
+from your `query()`. `serve()` owns auth, timeouts, NDJSON framing, and the
+error envelope; your methods receive the parsed request and return plain data.
+
+Every request carries `credentials`, the tenant's own upstream secrets, so
+one deployment serves many tenants and stores nothing between calls.
 
 ## Fill in (`src/connector.ts`)
 
-Every `YOUR CODE HERE` site carries its return contract. The mandatory five:
+Every `YOUR CODE HERE` site carries its contract. The four you must write:
 
-| method            | returns                                                        |
-| ----------------- | -------------------------------------------------------------- |
-| `discovery`       | your API's entities as `{ tables, warnings? }`                 |
-| `query`           | rows: push what your API can filter, `applyFilters()` the rest |
-| `queryStream`     | the same rows as batches (≤5000 rows each)                     |
-| `count`           | how many rows match the filters                                |
-| `sampleKeyValues` | sorted distinct head of a column, as text                      |
+| method     | returns                                                             |
+| ---------- | ------------------------------------------------------------------- |
+| `check`    | nothing; throws if the credentials are wrong (the tenant reads it)  |
+| `query`    | batches of rows: push what your API filters, `applyFilters()` the rest |
+| `count`    | how many rows match the filters                                     |
+| `discover` | your API's entities as `{ tables, warnings? }`                      |
 
-The optional five (`countExact`, `probeColumns`, `probeLink`, `probeGrain`,
-`aggregate`) already answer wire-legal defaults on the base class — override
-only what you implement. The probe kit does the math once you fetch values:
-`columnCountsFromValues`, `linkFromValues`, `grainFromValues`.
+`profileColumns`, `profileLink`, `profileGrain`, `exactCount`, and
+`sampleColumnValues` scan through `query()` on the base class and are already
+correct. Override one only to make it cheaper: a source-side `COUNT DISTINCT`,
+a total your API returns on a page. `aggregate()` declines with a 204 until you
+implement it and add `"aggregate"` to `endpoints`.
+
+The one rule with no default: a filter on a field you cannot answer must throw
+`unsupported` (422). `assertKnownFields(req, fields)` from the kit does it, and
+the template calls it in `query` and `count`. Rows that skipped a filter come
+back looking like rows that matched it.
 
 ## The honesty contract (`src/capability.ts`)
 
@@ -29,6 +36,9 @@ The capability doc is authored by hand because only you know what your
 pushdown + `applyFilters` combination honors. Every flag is earned: an
 advertised op that `query()` silently drops corrupts answers downstream. Start
 narrow, widen as you implement.
+
+`credentialSchema` is the other half: it is exactly the form Atlas shows a
+tenant, and exactly the keys `req.credentials` will carry back.
 
 ## Run
 
