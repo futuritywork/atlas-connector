@@ -16,6 +16,10 @@ const TOKEN_SLACK_MS = 5 * 60 * 1000;
 // lark app_access_token invalid / tenant token expired: refetch once and retry
 const TOKEN_EXPIRED_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
 
+// lark app-level qps (1254290 TooManyRequest): short waits inside the deadline outlast it
+const RATE_LIMITED_CODE = 1254290;
+const RATE_LIMIT_BACKOFF_MS = 600;
+
 const REQUIRED_KEYS = ["appId", "appSecret", "appToken"] as const;
 
 type LarkCredentials = {
@@ -139,6 +143,10 @@ export class LarkClient {
       if (TOKEN_EXPIRED_CODES.has(envelope.code) && !retried) {
         tokens.delete(this.tokenKey);
         return await this.request(method, path, deadline, opts, true);
+      }
+      if (envelope.code === RATE_LIMITED_CODE && deadline.remainingMs() > RATE_LIMIT_BACKOFF_MS * 2) {
+        await Bun.sleep(RATE_LIMIT_BACKOFF_MS);
+        return await this.request(method, path, deadline, opts, retried);
       }
       if (res.status === 404 || envelope.code === 91402) {
         throw unknownEntity(`lark: ${envelope.msg} (code=${envelope.code})`);

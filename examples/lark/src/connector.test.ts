@@ -12,12 +12,15 @@ afterEach(() => {
 });
 
 // the lark endpoints discover() walks, answered from one fixture base
-function stubLark(): string[] {
+function stubLark(intercept?: (pathname: string) => Response | undefined): string[] {
   const paths: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
     paths.push(url.pathname);
     const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+    const intercepted = intercept?.(url.pathname);
+    if (intercepted) return intercepted;
 
     if (url.pathname === MINT_PATH) {
       const sent = JSON.parse(String(init?.body)) as { app_secret: string };
@@ -61,6 +64,20 @@ describe("per-tenant isolation", () => {
     await expect(connector.discover(req(WRONG_SECRET))).rejects.toThrow(/app secret invalid/);
     // only the mint ran: nothing came out of the other tenant's cache
     expect(paths).toEqual([MINT_PATH]);
+  });
+
+  test("a 1254290 rate limit backs off and retries within the deadline", async () => {
+    let searchCalls = 0;
+    stubLark((pathname) => {
+      if (!pathname.endsWith("/records/search")) return undefined;
+      searchCalls += 1;
+      if (searchCalls > 1) return undefined;
+      return new Response(JSON.stringify({ code: 1254290, msg: "TooManyRequest" }), { status: 400 });
+    });
+
+    const answer = await new LarkConnector().discover(req(TENANT_A));
+    expect(answer.tables.map((table) => table.name)).toEqual(["deals"]);
+    expect(searchCalls).toBe(2);
   });
 
   test("check reports the mint failure and passes on the request's own deadline", async () => {
