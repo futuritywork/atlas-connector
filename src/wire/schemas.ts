@@ -5,7 +5,13 @@ import { CONNECTOR_LIMITS } from "./limits";
 import { AtlasType, AtlasValue, DateGrain, Filter, JoinField, UserSort } from "./vocabulary";
 
 const deadlineShape = { timeoutMs: z.number().int().min(1) } as const;
-const WireDeadline = z.object(deadlineShape);
+
+// the tenant's own upstream secrets, on every authed request: a connector holds none between calls
+export const Credentials = z.record(z.string(), z.string());
+export type Credentials = z.infer<typeof Credentials>;
+
+const authedShape = { credentials: Credentials, ...deadlineShape } as const;
+const WireAuthed = z.object(authedShape);
 
 const SourceJoinFieldWire = JoinField.extend({ type: AtlasType });
 const SourceJoinWire = z
@@ -57,13 +63,20 @@ export type AggregateSourceQueryWire = z.infer<typeof AggregateSourceQueryWire>;
 export const DialectQueryBody = z.object({ sql: z.string(), params: z.array(AtlasValue) }).strict();
 export type DialectQueryBody = z.infer<typeof DialectQueryBody>;
 
-export const DiscoveryRequest = WireDeadline;
+// proves one tenant's credentials and nothing else; the thrown message reaches the caller
+export const CheckRequest = WireAuthed;
+export type CheckRequest = z.infer<typeof CheckRequest>;
+
+export const CheckAnswer = z.object({ ok: z.literal(true) });
+export type CheckAnswer = z.infer<typeof CheckAnswer>;
+
+export const DiscoveryRequest = WireAuthed;
 export type DiscoveryRequest = z.infer<typeof DiscoveryRequest>;
 
-export const NativeQueryRequest = SourceQueryWire.extend(deadlineShape);
+export const NativeQueryRequest = SourceQueryWire.extend(authedShape);
 export type NativeQueryRequest = z.infer<typeof NativeQueryRequest>;
 
-export const DialectQueryRequest = DialectQueryBody.extend(deadlineShape);
+export const DialectQueryRequest = DialectQueryBody.extend(authedShape);
 export type DialectQueryRequest = z.infer<typeof DialectQueryRequest>;
 
 export const CountRequest = SourceQueryWire.pick({
@@ -71,7 +84,7 @@ export const CountRequest = SourceQueryWire.pick({
   and: true,
   or: true,
   fieldTypes: true,
-}).extend(deadlineShape);
+}).extend(authedShape);
 export type CountRequest = z.infer<typeof CountRequest>;
 
 const streamDeadlineShape = {
@@ -79,21 +92,21 @@ const streamDeadlineShape = {
   maxTimeoutMs: z.number().int().min(1),
 } as const;
 
-export const NativeQueryStreamRequest = SourceQueryWire.extend(deadlineShape).extend(streamDeadlineShape);
+export const NativeQueryStreamRequest = SourceQueryWire.extend(authedShape).extend(streamDeadlineShape);
 export type NativeQueryStreamRequest = z.infer<typeof NativeQueryStreamRequest>;
 
-export const DialectQueryStreamRequest = DialectQueryBody.extend(deadlineShape).extend(streamDeadlineShape);
+export const DialectQueryStreamRequest = DialectQueryBody.extend(authedShape).extend(streamDeadlineShape);
 export type DialectQueryStreamRequest = z.infer<typeof DialectQueryStreamRequest>;
 
 // explicit group-row bound; more groups than limit means overflow, Atlas discards it
 export const AggregateRequest = AggregateSourceQueryWire.extend({
   limit: z.number().int().min(1),
-}).extend(deadlineShape);
+}).extend(authedShape);
 export type AggregateRequest = z.infer<typeof AggregateRequest>;
 
 export const ProbeColumnsRequest = z
   .object({ table: z.string(), columns: z.array(z.string()).min(1) })
-  .extend(deadlineShape);
+  .extend(authedShape);
 export type ProbeColumnsRequest = z.infer<typeof ProbeColumnsRequest>;
 
 export const ProbeLinkRequest = z
@@ -103,15 +116,17 @@ export const ProbeLinkRequest = z
     toTable: z.string(),
     toColumn: z.string(),
   })
-  .extend(deadlineShape);
+  .extend(authedShape);
 export type ProbeLinkRequest = z.infer<typeof ProbeLinkRequest>;
 
-export const ProbeGrainRequest = z.object({ table: z.string(), column: z.string() }).extend(deadlineShape);
+export const ProbeGrainRequest = z.object({ table: z.string(), column: z.string() }).extend(authedShape);
 export type ProbeGrainRequest = z.infer<typeof ProbeGrainRequest>;
 
-export const CountExactRequest = z.object({ table: z.string() }).extend(deadlineShape);
+export const CountExactRequest = z.object({ table: z.string() }).extend(authedShape);
 export type CountExactRequest = z.infer<typeof CountExactRequest>;
 
+// sorted distinct head as text: numeric and temporal values by magnitude, text by byte order,
+// nulls excluded and the empty spelling dropped after the limit is taken
 export const SampleKeyValuesRequest = z
   .object({
     table: z.string(),
@@ -119,7 +134,7 @@ export const SampleKeyValuesRequest = z
     type: AtlasType,
     limit: z.number().int().min(1),
   })
-  .extend(deadlineShape);
+  .extend(authedShape);
 export type SampleKeyValuesRequest = z.infer<typeof SampleKeyValuesRequest>;
 
 // every JSON answer is a wrapped object, never a bare array

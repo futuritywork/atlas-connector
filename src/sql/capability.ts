@@ -1,7 +1,7 @@
 // derived atlas.json: the builders provably render everything advertised here, so the
 // doc cannot promise an op the flavor and catalog cannot spell
 
-import type { AtlasJson } from "../wire/atlas-json";
+import type { AtlasJson, CredentialField } from "../wire/atlas-json";
 import { type Op, OPS } from "../wire/vocabulary";
 import type { Catalog } from "./catalog";
 import type { SqlFlavor } from "./flavor";
@@ -11,6 +11,7 @@ export function sqlCapability(opts: {
   catalog: Catalog;
   flavor: SqlFlavor;
   enforcesDeclaredKeys: boolean;
+  credentialSchema: CredentialField[];
   overrides?: Partial<AtlasJson["capabilities"]>;
 }): AtlasJson {
   const hasArrayColumn = opts.catalog.tables.some((table) =>
@@ -34,6 +35,7 @@ export function sqlCapability(opts: {
       cheapProbes: false,
       ...opts.overrides,
     },
+    credentialSchema: opts.credentialSchema,
     endpoints: ["aggregate"],
   };
 }

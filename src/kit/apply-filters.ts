@@ -33,8 +33,9 @@ function parseDecimal(text: string): Decimal | null {
   return { negative, int, frac };
 }
 
-// digit-exact compare, so >2^53 twins stay distinct where a double would fold them
-function decimalCompare(a: string, b: string): number | null {
+// digit-exact compare, so >2^53 twins stay distinct where a double would fold them.
+// null when either side is not plain decimal text: the caller falls back to byte order
+export function decimalCompare(a: string, b: string): number | null {
   const left = parseDecimal(a);
   const right = parseDecimal(b);
   if (!left || !right) return null;

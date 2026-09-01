@@ -18,6 +18,7 @@ const doc = {
   protocolVersion: 1,
   slug: "my-atlas-connector",
   capabilities,
+  credentialSchema: [{ key: "databaseUrl", label: "Database URL", type: "password" }],
   endpoints: [],
 };
 
@@ -58,6 +59,26 @@ describe("AtlasJson", () => {
   test("aggregate is the only optional endpoint", () => {
     expect(AtlasJson.safeParse({ ...doc, endpoints: ["aggregate"] }).success).toBe(true);
     expect(AtlasJson.safeParse({ ...doc, endpoints: ["dialectQuery"] }).success).toBe(false);
+  });
+});
+
+describe("credentialSchema", () => {
+  test("is required; a connector with no upstream secret says so with an empty array", () => {
+    const { credentialSchema: _dropped, ...credless } = doc;
+    expect(AtlasJson.safeParse(credless).success).toBe(false);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [] }).success).toBe(true);
+  });
+
+  test("a field is exactly key, label, and a text or password type", () => {
+    const field = { key: "apiKey", label: "API key", type: "text" };
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [field] }).success).toBe(true);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "secret" }] }).success).toBe(
+      false,
+    );
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, hint: "x" }] }).success).toBe(false);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ key: "apiKey", type: "text" }] }).success).toBe(
+      false,
+    );
   });
 });
 

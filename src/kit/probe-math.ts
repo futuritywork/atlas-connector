@@ -3,7 +3,8 @@
 // grouping key is String(value); arrays include nulls; rows = the arrays' length.
 
 import type { ColumnCountsProbe, GrainProbe, LinkProbe, TableColumnsProbe } from "../wire/schemas";
-import { byteOrderCompare } from "./apply-filters";
+import type { AtlasType } from "../wire/vocabulary";
+import { byteOrderCompare, decimalCompare } from "./apply-filters";
 
 // protocol tuning — shared so no connector forks the near-unique band or the sample caps.
 // ≥0.999 keeps near-unique business keys joinable with blemishes surfaced; below it the distinct
@@ -96,4 +97,23 @@ export function grainFromValues(values: unknown[]): GrainProbe {
   let nonNull = 0;
   for (const count of groups.values()) nonNull += count;
   return { rows: values.length, distinct: groups.size, nonNull };
+}
+
+// numbers order by magnitude; everything else orders as bytes, which for iso date text is
+// chronological, so both match the sql sample query's ORDER BY
+function sampleCompare(type: AtlasType): (a: string, b: string) => number {
+  if (type !== "number" && type !== "decimal") return byteOrderCompare;
+  return (a, b) => decimalCompare(a, b) ?? byteOrderCompare(a, b);
+}
+
+// the sql sample query's order of operations: distinct non-nulls, sorted, capped, empties dropped
+export function sampleFromValues(values: unknown[], type: AtlasType, limit: number): string[] {
+  const distinct = new Set<string>();
+  for (const value of values) {
+    if (value != null) distinct.add(String(value));
+  }
+  return [...distinct]
+    .sort(sampleCompare(type))
+    .slice(0, limit)
+    .filter((value) => value !== "");
 }

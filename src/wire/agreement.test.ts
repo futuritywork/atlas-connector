@@ -88,6 +88,7 @@ describe("wire vocabulary agreement", () => {
         probeConcurrency: 4,
         cheapProbes: false,
       },
+      credentialSchema: [{ key: "apiKey", label: "API key", type: "password" }],
       endpoints: [],
     };
     expect(AtlasJson.safeParse(doc).success).toBe(true);

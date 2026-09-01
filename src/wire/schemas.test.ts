@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { CONNECTOR_LIMITS } from "./limits";
 import {
   AggregateRequest,
+  CheckAnswer,
+  CheckRequest,
   CountAnswer,
   CountExactAnswer,
   CountRequest,
@@ -64,15 +66,33 @@ describe("SourceQueryWire", () => {
   });
 });
 
-describe("requests carry deadlines", () => {
-  test("NativeQueryRequest = query + timeoutMs", () => {
-    expect(NativeQueryRequest.safeParse({ ...fullQuery, timeoutMs: 5000 }).success).toBe(true);
+const authed = { credentials: { apiKey: "k" }, timeoutMs: 5000 };
+
+describe("requests carry deadlines and the tenant's credentials", () => {
+  test("NativeQueryRequest = query + credentials + timeoutMs", () => {
+    expect(NativeQueryRequest.safeParse({ ...fullQuery, ...authed }).success).toBe(true);
     expect(NativeQueryRequest.safeParse(fullQuery).success).toBe(false);
-    expect(NativeQueryRequest.safeParse({ ...fullQuery, timeoutMs: 0 }).success).toBe(false);
+    expect(NativeQueryRequest.safeParse({ ...fullQuery, ...authed, timeoutMs: 0 }).success).toBe(false);
+  });
+
+  test("credentials are required, string-valued, and never absent", () => {
+    const { credentials: _dropped, ...credless } = authed;
+    expect(NativeQueryRequest.safeParse({ ...fullQuery, ...credless }).success).toBe(false);
+    expect(NativeQueryRequest.safeParse({ ...fullQuery, ...authed, credentials: {} }).success).toBe(true);
+    expect(
+      NativeQueryRequest.safeParse({ ...fullQuery, ...authed, credentials: { port: 5432 } }).success,
+    ).toBe(false);
+  });
+
+  test("CheckRequest is credentials and a deadline, nothing else to leak", () => {
+    expect(CheckRequest.safeParse(authed).success).toBe(true);
+    expect(CheckRequest.safeParse({ timeoutMs: 5000 }).success).toBe(false);
+    expect(CheckAnswer.safeParse({ ok: true }).success).toBe(true);
+    expect(CheckAnswer.safeParse({ ok: false }).success).toBe(false);
   });
 
   test("stream requests also require idle + max deadlines", () => {
-    const base = { ...fullQuery, timeoutMs: 5000 };
+    const base = { ...fullQuery, ...authed };
     expect(NativeQueryStreamRequest.safeParse(base).success).toBe(false);
     expect(
       NativeQueryStreamRequest.safeParse({ ...base, idleTimeoutMs: 30_000, maxTimeoutMs: 600_000 }).success,
@@ -80,13 +100,13 @@ describe("requests carry deadlines", () => {
   });
 
   test("CountRequest takes filters only", () => {
-    const count = { table: "companies", and: [], timeoutMs: 1000 };
+    const count = { table: "companies", and: [], ...authed };
     expect(CountRequest.safeParse(count).success).toBe(true);
     expect(CountRequest.safeParse({ ...count, sort: [] }).success).toBe(false);
   });
 
   test("SampleKeyValuesRequest binds a column type", () => {
-    const sample = { table: "t", column: "id", type: "number", limit: 50, timeoutMs: 1000 };
+    const sample = { table: "t", column: "id", type: "number", limit: 50, ...authed };
     expect(SampleKeyValuesRequest.safeParse(sample).success).toBe(true);
     expect(SampleKeyValuesRequest.safeParse({ ...sample, type: "uuid" }).success).toBe(false);
   });
@@ -100,6 +120,7 @@ describe("AggregateRequest", () => {
     measures: [{ fn: "sum", field: "total", as: "revenue" }],
     stringFields: [],
     limit: 1000,
+    credentials: { apiKey: "k" },
     timeoutMs: 5000,
   };
 

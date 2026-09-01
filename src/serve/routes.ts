@@ -1,8 +1,9 @@
 import { Elysia } from "elysia";
-import type { AtlasConnector } from "../connector";
+import { type AtlasConnector, drainRows } from "../connector";
 import { ATLAS_JSON_PATH } from "../wire/atlas-json";
 import {
   AggregateRequest,
+  CheckRequest,
   CountExactRequest,
   CountRequest,
   DiscoveryRequest,
@@ -29,6 +30,8 @@ export function connectorRoutes(
           set.status = error.status;
           return error.body();
         }
+        // the envelope the caller gets says nothing; the operator needs the real thing
+        console.error(`[${connector.slug}] ${code}`, error);
         const status = code === "PARSE" ? 400 : 500;
         set.status = status;
         return {
@@ -42,17 +45,37 @@ export function connectorRoutes(
       // unauthenticated: no bearer, no customer data — only the capability surface
       .get(ATLAS_JSON_PATH, () => connector.capability())
 
+      .post("/check", async ({ body, headers, set }) => {
+        assertBearer(headers.authorization);
+        const req = parseBody(CheckRequest, body);
+        try {
+          await withTimeout(req.timeoutMs, () => connector.check(req));
+        } catch (error) {
+          if (error instanceof ConnectorError) throw error;
+          // the one message meant for the tenant: it is what the connect form shows them
+          set.status = 400;
+          return {
+            error: {
+              code: "check_failed",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+        return { ok: true };
+      })
+
       .post("/discovery", async ({ body, headers }) => {
         assertBearer(headers.authorization);
         const req = parseBody(DiscoveryRequest, body);
-        return await withTimeout(req.timeoutMs, () => connector.discovery(req));
+        return await withTimeout(req.timeoutMs, () => connector.discover(req));
       })
 
       .post("/query", async ({ body, headers }) => {
         assertBearer(headers.authorization);
         const req = parseBody(NativeQueryRequest, body);
+        // one body, so the batches are drained; the request's own limit bounds the read
         return await withTimeout(req.timeoutMs, async () => ({
-          rows: await connector.query(req),
+          rows: await drainRows(connector.query(req), req.limit),
         }));
       })
 
@@ -68,7 +91,7 @@ export function connectorRoutes(
         assertBearer(headers.authorization);
         const req = parseBody(NativeQueryStreamRequest, body);
         // the stream owns its idle/hard deadlines; no outer withTimeout
-        return ndjsonStream(connector.queryStream(req), {
+        return ndjsonStream(connector.query(req), {
           idleTimeoutMs: req.idleTimeoutMs,
           maxTimeoutMs: req.maxTimeoutMs,
         });
@@ -92,21 +115,21 @@ export function connectorRoutes(
         assertBearer(headers.authorization);
         const req = parseBody(ProbeColumnsRequest, body);
         // a JSON null body is the wire-legal "no probe"; wrapped so Elysia never sends an empty 200
-        const probe = await withTimeout(req.timeoutMs, () => connector.probeColumns(req));
+        const probe = await withTimeout(req.timeoutMs, () => connector.profileColumns(req));
         return Response.json(probe);
       })
 
       .post("/probe/link", async ({ body, headers }) => {
         assertBearer(headers.authorization);
         const req = parseBody(ProbeLinkRequest, body);
-        const probe = await withTimeout(req.timeoutMs, () => connector.probeLink(req));
+        const probe = await withTimeout(req.timeoutMs, () => connector.profileLink(req));
         return Response.json(probe);
       })
 
       .post("/probe/grain", async ({ body, headers }) => {
         assertBearer(headers.authorization);
         const req = parseBody(ProbeGrainRequest, body);
-        const probe = await withTimeout(req.timeoutMs, () => connector.probeGrain(req));
+        const probe = await withTimeout(req.timeoutMs, () => connector.profileGrain(req));
         return Response.json(probe);
       })
 
@@ -115,7 +138,7 @@ export function connectorRoutes(
         const req = parseBody(CountExactRequest, body);
         // null count sits inside the wrapper, never a bare null body
         return await withTimeout(req.timeoutMs, async () => ({
-          count: await connector.countExact(req),
+          count: await connector.exactCount(req),
         }));
       })
 
@@ -123,7 +146,7 @@ export function connectorRoutes(
         assertBearer(headers.authorization);
         const req = parseBody(SampleKeyValuesRequest, body);
         return await withTimeout(req.timeoutMs, async () => ({
-          values: await connector.sampleKeyValues(req),
+          values: await connector.sampleColumnValues(req),
         }));
       })
   );

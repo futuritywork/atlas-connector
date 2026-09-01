@@ -24,6 +24,7 @@ export { ndjsonStream } from "./serve/stream";
 
 // the kit a rest/erp author reaches for when they don't extend SqlConnector
 export { applyFilters } from "./kit/apply-filters";
+export { assertKnownFields } from "./kit/assert-known-fields";
 export {
   columnCountsFromValues,
   DUP_SAMPLE_CAP,
@@ -31,4 +32,5 @@ export {
   linkFromValues,
   NEAR_UNIQUE_MIN_SHARE,
   ORPHAN_SAMPLE_CAP,
+  sampleFromValues,
 } from "./kit/probe-math";

@@ -57,7 +57,8 @@ function runnerOf(results: Row[][]) {
   return { run, calls };
 }
 
-const deadline = { timeoutMs: 1000 };
+// the probe sql reads only the request's table and columns; the pool already holds the credentials
+const deadline = { credentials: {}, timeoutMs: 1000 };
 
 describe("probeColumns", () => {
   test("unique, non-unique, and empty columns from one aggregate scan", async () => {

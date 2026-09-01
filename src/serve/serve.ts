@@ -14,10 +14,16 @@ export type ServeOptions = {
 const MIN_TOKEN_LENGTH = 32;
 const DEFAULT_PORT = 4100;
 
-type OptionalMethod = "aggregate" | "probeColumns" | "probeLink" | "probeGrain";
+type BaseImplMethod =
+  | "aggregate"
+  | "profileColumns"
+  | "profileLink"
+  | "profileGrain"
+  | "exactCount"
+  | "sampleColumnValues";
 
-// prototype identity: an un-overridden optional still resolves to the base impl
-function isBaseImpl(connector: AtlasConnector, method: OptionalMethod): boolean {
+// prototype identity: an un-overridden method still resolves to the base impl
+function isBaseImpl(connector: AtlasConnector, method: BaseImplMethod): boolean {
   return connector[method] === AtlasConnector.prototype[method];
 }
 
@@ -39,12 +45,12 @@ export function createApp(connector: AtlasConnector, opts: Pick<ServeOptions, "t
     console.warn(`[${connector.slug}] aggregate() is implemented but endpoints omits "aggregate"`);
   }
 
-  const nullProbes = (["probeColumns", "probeLink", "probeGrain"] as const).filter((method) =>
-    isBaseImpl(connector, method),
-  );
-  if (nullProbes.length > 0) {
+  const derived = (
+    ["profileColumns", "profileLink", "profileGrain", "exactCount", "sampleColumnValues"] as const
+  ).filter((method) => isBaseImpl(connector, method));
+  if (derived.length > 0) {
     console.log(
-      `[${connector.slug}] ${nullProbes.join(", ")} answer null; key promotion degrades until probes are real`,
+      `[${connector.slug}] ${derived.join(", ")} scan through query(); override them for source-side math`,
     );
   }
 

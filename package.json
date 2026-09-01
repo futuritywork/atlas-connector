@@ -1,6 +1,6 @@
 {
   "name": "@futurity/atlas-connector",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Build a Futurity Atlas external connector: protocol wire, server runtime, SQL engine.",
   "type": "module",
   "license": "MIT",

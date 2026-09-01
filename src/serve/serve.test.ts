@@ -22,6 +22,7 @@ function doc(overrides: Partial<AtlasJson> = {}): AtlasJson {
       probeConcurrency: 4,
       cheapProbes: false,
     },
+    credentialSchema: [],
     endpoints: [],
     ...overrides,
   };
@@ -35,18 +36,13 @@ class BootTestConnector extends AtlasConnector {
   capability(): AtlasJson {
     return this.served;
   }
-  async discovery(): Promise<DiscoveryAnswer> {
+  async check(): Promise<void> {}
+  async discover(): Promise<DiscoveryAnswer> {
     return { tables: [] };
   }
-  async query(): Promise<SourceRow[]> {
-    return [];
-  }
-  async *queryStream(): AsyncIterable<SourceRow[]> {}
+  async *query(): AsyncIterable<SourceRow[]> {}
   async count(): Promise<number> {
     return 0;
-  }
-  async sampleKeyValues(): Promise<string[]> {
-    return [];
   }
 }
 
@@ -98,12 +94,16 @@ describe("createApp boot checks", () => {
     expect(warn.mock.calls.length).toBe(0);
   });
 
-  test("base-impl probes get one boot log line", () => {
+  test("derived profiling gets one boot log line naming every un-overridden method", () => {
     const { log } = silence();
     createApp(new BootTestConnector(), { token: TOKEN });
     const logged = log.mock.calls.map((call) => String(call[0]));
     expect(
-      logged.filter((message) => message.includes("probeColumns, probeLink, probeGrain")).length,
+      logged.filter((message) =>
+        message.includes(
+          "profileColumns, profileLink, profileGrain, exactCount, sampleColumnValues scan through query()",
+        ),
+      ).length,
     ).toBe(1);
   });
 });

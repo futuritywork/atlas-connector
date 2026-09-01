@@ -6,6 +6,7 @@ import {
   linkFromValues,
   NEAR_UNIQUE_MIN_SHARE,
   ORPHAN_SAMPLE_CAP,
+  sampleFromValues,
 } from "./probe-math";
 
 // the monorepo conformance corpus join-agreement fixtures, embedded verbatim: the verdicts
@@ -177,5 +178,29 @@ describe("grainFromValues", () => {
     const grain = grainFromValues(AGREE_DIMS_UNIQUE_K);
     expect(grain.distinct).toBe(columns.k?.distinct ?? -1);
     expect(grain.nonNull).toBe(columns.k?.nonNull ?? -1);
+  });
+});
+
+describe("sampleFromValues", () => {
+  test("numbers order by magnitude, not by bytes", () => {
+    expect(sampleFromValues([10, 2, 10, null], "number", 5)).toEqual(["2", "10"]);
+    expect(sampleFromValues(["10", "2"], "string", 5)).toEqual(["10", "2"]);
+  });
+
+  test("decimals past 2^53 stay distinct and ordered digit-exact", () => {
+    const big = ["9007199254740993", "9007199254740992"];
+    expect(sampleFromValues(big, "decimal", 5)).toEqual(["9007199254740992", "9007199254740993"]);
+  });
+
+  test("iso datetimes order chronologically as bytes", () => {
+    const stamps = ["2026-01-02T00:00:00", "2026-01-01T23:59:59"];
+    expect(sampleFromValues(stamps, "datetime", 5)).toEqual([
+      "2026-01-01T23:59:59",
+      "2026-01-02T00:00:00",
+    ]);
+  });
+
+  test("the limit is taken before the empty spelling is dropped, as the sql query does", () => {
+    expect(sampleFromValues(["", "a", "b"], "string", 2)).toEqual(["a"]);
   });
 });

@@ -39,6 +39,7 @@ const capability = (over?: Partial<Parameters<typeof sqlCapability>[0]>) =>
     catalog: scalarCatalog,
     flavor: pgFlavor({ arrayContains: true }),
     enforcesDeclaredKeys: false,
+    credentialSchema: [{ key: "databaseUrl", label: "Database URL", type: "password" }],
     ...over,
   });
 
@@ -72,6 +73,12 @@ describe("sqlCapability doc shape", () => {
 
   test("advertises the aggregate endpoint", () => {
     expect(capability().endpoints).toEqual(["aggregate"]);
+  });
+
+  test("carries the credential inputs the tenant is asked for", () => {
+    expect(capability().credentialSchema).toEqual([
+      { key: "databaseUrl", label: "Database URL", type: "password" },
+    ]);
   });
 
   test("threads slug and enforcesDeclaredKeys", () => {
