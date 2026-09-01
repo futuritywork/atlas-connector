@@ -30,6 +30,13 @@ export const CredentialFieldWire = z
     key: z.string(),
     label: z.string(),
     type: z.enum(["text", "password"]),
+    /** example value, shown greyed inside the empty input. */
+    placeholder: z.string().optional(),
+    /**
+     * short markdown rendered under the input. it must say where the value is found: name the exact
+     * page in the vendor's console and link the vendor's own doc for it.
+     */
+    help: z.string().optional(),
   })
   .strict();
 export type CredentialField = z.infer<typeof CredentialFieldWire>;

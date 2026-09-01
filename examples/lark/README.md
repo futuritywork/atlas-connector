@@ -2,8 +2,7 @@
 
 an atlas external connector for lark base (bitable), built on
 `@futurity/atlas-connector`. tables → atlas tables, fields → columns,
-`records/search` → rows. see `LARK-CONNECTOR.md` for the api-level feasibility
-assessment and the mapping tables.
+`records/search` → rows.
 
 one process serves every tenant. a tenant's app id, app secret, and base
 `app_token` arrive on each request, so nothing about a base is configured here
@@ -22,18 +21,34 @@ bun run check          # tsc --noEmit
 curl http://localhost:4100/.well-known/futurity/atlas.json
 ```
 
-the doc's `credentialSchema` is what atlas renders in the connect form:
+the doc's `credentialSchema` is what atlas renders in the connect form. each entry's
+`placeholder` fills the empty input and its `help` is markdown shown underneath, naming the
+console page the value is copied from:
 
 ```json
 [
-  { "key": "appId", "label": "App ID", "type": "text" },
-  { "key": "appSecret", "label": "App secret", "type": "password" },
-  { "key": "appToken", "label": "Base app token", "type": "text" }
+  {
+    "key": "appId",
+    "label": "App ID",
+    "type": "text",
+    "placeholder": "cli_XXXXXXXXXXXXXXXX",
+    "help": "Lark Developer Console → your app → **Credentials & Basic Info**, the field labelled **App ID**. Your apps are listed at [open.larksuite.com/app](https://open.larksuite.com/app)."
+  },
+  {
+    "key": "appSecret",
+    "label": "App secret",
+    "type": "password",
+    "help": "The **App Secret** on that same **Credentials & Basic Info** page of the [Lark Developer Console](https://open.larksuite.com/app). The app also needs the `bitable:app:readonly` permission."
+  },
+  {
+    "key": "appToken",
+    "label": "Base app token",
+    "type": "text",
+    "placeholder": "bascnXXXXXXXXXXXXXXXXXXXXXX",
+    "help": "The id in the base's URL, `https://<tenant>.larksuite.com/base/<app_token>`. Add the app to that base as a collaborator first, or it cannot read the tables."
+  }
 ]
 ```
-
-`appToken` is the id in the base's url: `https://xxx.larksuite.com/base/<app_token>`.
-the lark app needs the `bitable:app:readonly` scope and the base has to be shared with it.
 
 prove a credential set before anything else:
 

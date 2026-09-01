@@ -46,6 +46,9 @@ export abstract class AtlasConnector {
   /**
    * read unauthenticated before anything else: which pushdowns Atlas may use, which credentials the tenant is asked for.
    * called on every connect and refresh, so build it from constants.
+   *
+   * every credentialSchema field should carry a `placeholder` and a `help` string; `help` is short markdown
+   * shown under the input, naming the vendor console page the value is copied from and linking its doc.
    */
   abstract capability(): AtlasJson;
 

@@ -63,7 +63,13 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
   readonly enforcesDeclaredKeys: boolean = false;
   // what the tenant types to reach their database; override when the driver takes separate parts
   readonly credentialSchema: CredentialField[] = [
-    { key: "databaseUrl", label: "Database URL", type: "password" },
+    {
+      key: "databaseUrl",
+      label: "Database URL",
+      type: "password",
+      placeholder: "postgres://user:password@host:5432/db",
+      help: "The whole connection URL, password included: `postgres://user:password@host:5432/db`. Use a read-only role that can see the schema this connector reads.",
+    },
   ];
 
   /**

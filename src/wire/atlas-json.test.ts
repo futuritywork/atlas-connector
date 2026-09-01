@@ -69,7 +69,7 @@ describe("credentialSchema", () => {
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [] }).success).toBe(true);
   });
 
-  test("a field is exactly key, label, and a text or password type", () => {
+  test("a field is key, label, a text or password type, and nothing else", () => {
     const field = { key: "apiKey", label: "API key", type: "text" };
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [field] }).success).toBe(true);
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "secret" }] }).success).toBe(
@@ -79,6 +79,13 @@ describe("credentialSchema", () => {
     expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ key: "apiKey", type: "text" }] }).success).toBe(
       false,
     );
+  });
+
+  test("placeholder and help are optional strings", () => {
+    const field = { key: "apiKey", label: "API key", type: "text" as const };
+    const described = { ...field, placeholder: "sk_live_XXXXXXXXXX", help: "Settings -> [API keys](https://x.dev)." };
+    expect(AtlasJson.parse({ ...doc, credentialSchema: [described] }).credentialSchema[0]).toEqual(described);
+    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, help: 7 }] }).success).toBe(false);
   });
 });
 

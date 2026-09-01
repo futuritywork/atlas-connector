@@ -17,11 +17,22 @@ export const ATLAS_JSON: AtlasJson = {
     probeConcurrency: 4,
     cheapProbes: false,
   },
-  // YOUR CODE HERE: what a tenant types to reach their own instance. "password" masks the
-  // input. these arrive on every request and are never stored here
+  // YOUR CODE HERE: what a tenant types to reach their own instance; "password" masks the input.
+  // help is markdown under the input: name the exact page in the vendor's ui and link its doc
   credentialSchema: [
-    { key: "baseUrl", label: "API base URL", type: "text" },
-    { key: "apiKey", label: "API key", type: "password" },
+    {
+      key: "baseUrl",
+      label: "API base URL",
+      type: "text",
+      placeholder: "https://acme.example.com/api/v2",
+      help: "The root your instance answers on, with no trailing slash. It is the address in your browser when you are signed in to the vendor's app.",
+    },
+    {
+      key: "apiKey",
+      label: "API key",
+      type: "password",
+      help: "Vendor console → **Settings → API keys → Create key**. Copy it when it is shown; the console never shows it again.",
+    },
   ],
   endpoints: [], // add "aggregate" only when you override aggregate()
 };

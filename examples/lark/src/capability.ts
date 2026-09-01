@@ -19,9 +19,26 @@ export const ATLAS_JSON: AtlasJson = {
   },
   // the app credentials and the base they open; one connector serves every tenant that types a set
   credentialSchema: [
-    { key: "appId", label: "App ID", type: "text" },
-    { key: "appSecret", label: "App secret", type: "password" },
-    { key: "appToken", label: "Base app token", type: "text" },
+    {
+      key: "appId",
+      label: "App ID",
+      type: "text",
+      placeholder: "cli_XXXXXXXXXXXXXXXX",
+      help: "Lark Developer Console → your app → **Credentials & Basic Info**, the field labelled **App ID**. Your apps are listed at [open.larksuite.com/app](https://open.larksuite.com/app).",
+    },
+    {
+      key: "appSecret",
+      label: "App secret",
+      type: "password",
+      help: "The **App Secret** on that same **Credentials & Basic Info** page of the [Lark Developer Console](https://open.larksuite.com/app). The app also needs the `bitable:app:readonly` permission.",
+    },
+    {
+      key: "appToken",
+      label: "Base app token",
+      type: "text",
+      placeholder: "bascnXXXXXXXXXXXXXXXXXXXXXX",
+      help: "The id in the base's URL, `https://<tenant>.larksuite.com/base/<app_token>`. Add the app to that base as a collaborator first, or it cannot read the tables.",
+    },
   ],
   endpoints: [], // aggregate declined: bitable has no server-side group-by
 };
