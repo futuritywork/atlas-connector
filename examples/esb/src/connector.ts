@@ -43,12 +43,14 @@ type QueryShape = {
   joins?: unknown[];
 };
 
+type UnavailabilityReason = "permission" | "unavailable" | "rejected" | "incompatible";
+
 type AvailabilityVerdict =
   | { object: EsbCoreObject; accessible: true }
   | {
       object: EsbCoreObject;
       accessible: false;
-      reason: "permission" | "unavailable" | "rejected" | "incompatible";
+      reason: UnavailabilityReason;
       status: number;
       code: string;
     };
@@ -89,10 +91,7 @@ function decimalCompare(a: string, b: string): number | null {
   return (left.frac < right.frac ? -1 : 1) * flip;
 }
 
-function compareCells(a: AtlasValue, b: AtlasValue, type: AtlasType): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
+function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>, type: AtlasType): number {
   if (type === "number" || type === "decimal") {
     return decimalCompare(String(a), String(b)) ?? byteOrderCompare(String(a), String(b));
   }
@@ -150,16 +149,14 @@ function omittable(error: unknown): error is EsbCoreError & { status: number } {
 
 function inaccessibleVerdict(object: EsbCoreObject, error: EsbCoreError & { status: number }): AvailabilityVerdict {
   const incompatible = error.code === "malformed-response" || error.code === "non-progressing-page";
+  let reason: UnavailabilityReason = "rejected";
+  if (incompatible) reason = "incompatible";
+  else if (error.failureKind === "permission" || error.status === 403) reason = "permission";
+  else if (error.status === 404) reason = "unavailable";
   return {
     object,
     accessible: false,
-    reason: incompatible
-      ? "incompatible"
-      : error.failureKind === "permission" || error.status === 403
-        ? "permission"
-        : error.status === 404
-          ? "unavailable"
-          : "rejected",
+    reason,
     status: error.status,
     code: error.code,
   };

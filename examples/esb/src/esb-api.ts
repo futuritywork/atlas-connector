@@ -138,9 +138,17 @@ function entryFor(key: string): TokenEntry {
   return created;
 }
 
+function deadlineExceeded(timeoutMs: number) {
+  return timeout(`ESB Core upstream budget of ${timeoutMs}ms exhausted`);
+}
+
+function requestTimedOut(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted || (error as { name?: unknown } | null)?.name === "TimeoutError";
+}
+
 export function makeDeadline(timeoutMs: number): Deadline {
   const end = Date.now() + timeoutMs;
-  const exhausted = () => timeout(`ESB Core upstream budget of ${timeoutMs}ms exhausted`);
+  const exhausted = () => deadlineExceeded(timeoutMs);
   return {
     timeoutMs,
     remainingMs() {
@@ -160,10 +168,7 @@ async function waitWithinDeadline<T>(promise: Promise<T>, deadline: Deadline): P
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(timeout(`ESB Core upstream budget of ${deadline.timeoutMs}ms exhausted`)),
-          deadline.remainingMs(),
-        );
+        timer = setTimeout(() => reject(deadlineExceeded(deadline.timeoutMs)), deadline.remainingMs());
       }),
     ]);
   } finally {
@@ -187,9 +192,7 @@ async function readResponseBody(response: Response, signal: AbortSignal): Promis
   try {
     return await response.text();
   } catch (error) {
-    if (signal.aborted || (error as { name?: unknown } | null)?.name === "TimeoutError") {
-      throw timeout("ESB Core request timed out");
-    }
+    if (requestTimedOut(error, signal)) throw timeout("ESB Core request timed out");
     throw new Error(`ESB Core HTTP ${response.status}: response body could not be read`);
   }
 }
@@ -283,9 +286,7 @@ export class EsbCoreApi {
         signal,
       });
     } catch (error) {
-      if (signal.aborted || (error as { name?: unknown } | null)?.name === "TimeoutError") {
-        throw timeout("ESB Core request timed out");
-      }
+      if (requestTimedOut(error, signal)) throw timeout("ESB Core request timed out");
       throw new Error("ESB Core network request failed");
     }
     if (response.status >= 300 && response.status < 400) {
@@ -303,29 +304,23 @@ export class EsbCoreApi {
     requestToken?: TokenState,
   ): TokenState {
     const code = failureCode(response.envelope);
-    if (!isSuccessfulStatus(response.status)) {
+    const tokenFailure = (applicationFailure: boolean): EsbCoreError => {
       const credentialFailure =
         response.status === 401 ||
         response.status === 403 ||
         code === "EC03100001" ||
         (endpoint === "login" && code === "EC03100032");
-      throw this.error(
+      return this.error(
         code ?? String(response.status),
         credentialFailure ? "credentials were rejected" : sanitizedDetail(response.status),
-        { credentialFailure, status: response.status, requestToken },
+        { credentialFailure, status: response.status, applicationFailure, requestToken },
       );
-    }
+    };
+    if (!isSuccessfulStatus(response.status)) throw tokenFailure(false);
+
     const success = EsbSuccessEnvelope.safeParse(response.envelope);
     if (!success.success) {
-      if (code !== null) {
-        const credentialFailure = code === "EC03100001" || (endpoint === "login" && code === "EC03100032");
-        throw this.error(code, credentialFailure ? "credentials were rejected" : sanitizedDetail(response.status), {
-          credentialFailure,
-          status: response.status,
-          applicationFailure: true,
-          requestToken,
-        });
-      }
+      if (code !== null) throw tokenFailure(true);
       throw this.error("malformed-envelope", "token response envelope was malformed", {
         status: response.status,
         requestToken,
