@@ -41,8 +41,8 @@ bun run start
 The environment contains only:
 
 - `ATLAS_CONNECTOR_TOKEN` — required bearer token, at least 32 characters.
-- `PORT` or `CONNECTOR_PORT` — listening port; `PORT` wins and the default is
-  `4100`.
+- `PORT` or `CONNECTOR_PORT` — listening port from 1 through 65535; `PORT` wins
+  and the default is `4100`.
 
 Check the public capability document:
 
@@ -62,8 +62,10 @@ The connector:
   once;
 - follows the documented `next` continuation even across empty pages, with a
   hard 20,000-page guard;
-- validates response envelopes, page metadata, rows, and scalar primary keys;
-- evaluates every advertised filter locally with the SDK's `applyFilters`;
+- validates response envelopes, page metadata, and requested row values
+  against catalog-derived Zod schemas;
+- validates filter operands against catalog types before evaluating every
+  advertised filter locally with the SDK's `applyFilters`;
 - supports multi-column, digit-exact sorting with nulls last, offset, projection,
   limits, and scan counts;
 - converts ISO 8601 datetime cells and matching filter operands carrying `Z` or

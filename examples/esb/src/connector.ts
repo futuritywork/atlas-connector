@@ -2,6 +2,7 @@ import {
   applyFilters,
   assertKnownFields,
   AtlasConnector,
+  badRequest,
   CONNECTOR_LIMITS,
   unknownEntity,
   unsupported,
@@ -19,7 +20,7 @@ import {
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
 import { ESB_CORE_CATALOG } from "./catalog";
-import { createFilterSetSchema, EsbDatetimeValue } from "./schemas";
+import { createFilterSetSchema } from "./schemas";
 import type { EsbCoreObject } from "./types";
 import {
   EsbCoreApi,
@@ -135,31 +136,6 @@ function project(rows: SourceRow[], fields: string[]): SourceRow[] {
   });
 }
 
-function normalizeRow(
-  object: EsbCoreObject,
-  fields: Iterable<string>,
-  row: Record<string, unknown>,
-  fieldTypes: ReadonlyMap<string, AtlasType>,
-): SourceRow {
-  const normalized: SourceRow = {};
-  for (const field of fields) {
-    const raw = row[field] ?? null;
-    if (
-      raw !== null &&
-      typeof raw !== "string" &&
-      typeof raw !== "boolean" &&
-      (typeof raw !== "number" || !Number.isFinite(raw))
-    ) {
-      throw new Error(`esb-core: ${object.name} returned a non-scalar value for ${field}`);
-    }
-    normalized[field] = fieldTypes.get(field) === "datetime" ? EsbDatetimeValue.parse(raw) : raw;
-  }
-  if (object.primaryKey && normalized[object.primaryKey] === null) {
-    throw new Error(`esb-core: ${object.name} returned a row without a scalar ${object.primaryKey}`);
-  }
-  return normalized;
-}
-
 function omittable(error: unknown): error is EsbCoreError & { status: number } {
   if (!(error instanceof EsbCoreError) || error.credentialFailure || error.failureKind === "authentication") {
     return false;
@@ -268,12 +244,12 @@ export class EsbCoreConnector extends AtlasConnector {
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    const fieldTypes = this.validate(req, object);
-    const fields = neededColumns(req, object);
+    this.validate(req, object);
+    const fields = [...neededColumns(req, object)];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       deadline.check();
-      const result = await api.collection(object, page, PAGE_SIZE, deadline);
-      const rows = result.rows.map((row) => normalizeRow(object, fields, row, fieldTypes));
+      const result = await api.collection(object, page, PAGE_SIZE, deadline, fields);
+      const rows = project(result.rows, fields);
       for (let index = 0; index < rows.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
         deadline.check();
         yield rows.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch);
@@ -290,10 +266,11 @@ export class EsbCoreConnector extends AtlasConnector {
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
     const fieldTypes = Object.fromEntries(object.columns.map((column) => [column.name, column.type]));
-    const filters = createFilterSetSchema(fieldTypes).parse({ and: req.and, or: req.or });
+    const parsedFilters = createFilterSetSchema(fieldTypes).safeParse({ and: req.and, or: req.or });
+    if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
     for await (const batch of this.scan(api, req, deadline)) {
       deadline.check();
-      const filtered = applyFilters(batch, filters, fieldTypes);
+      const filtered = applyFilters(batch, parsedFilters.data, fieldTypes);
       deadline.check();
       yield filtered;
     }

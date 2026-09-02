@@ -20,6 +20,7 @@ const ADVANCE_PAYMENTS = ESB_CORE_CATALOG.find((object) => object.name === "adva
 const ITEM_JOURNALS = ESB_CORE_CATALOG.find((object) => object.name === "item_journals")!;
 const PRICELISTS = ESB_CORE_CATALOG.find((object) => object.name === "pricelists")!;
 const RECEIPTS = ESB_CORE_CATALOG.find((object) => object.name === "receipts")!;
+const CUSTOMERS = ESB_CORE_CATALOG.find((object) => object.name === "customers")!;
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -176,6 +177,21 @@ describe("ESB Core discovery", () => {
     });
   });
 
+  test("omits entities whose rows contradict their catalog schema", async () => {
+    mockFetch(({ url }) => {
+      if (url.pathname.endsWith("/auth/login")) return token();
+      const object = objectForPath(url.pathname)!;
+      if (object === PRODUCTS) return page([{ productID: 1, productName: { malformed: true } }], "", 1, 1);
+      return object.mode === "direct" ? envelope([]) : page([], "", 1, 1);
+    });
+    const answer = await new EsbCoreConnector().discover({ credentials: CREDENTIALS, timeoutMs: 5_000 });
+    expect(answer.tables).toHaveLength(38);
+    expect(answer.tables.some((table) => table.name === PRODUCTS.name)).toBe(false);
+    expect(answer.warnings).toEqual([
+      `ESB Core products (${PRODUCTS.path}) was omitted: response format is not supported by Atlas`,
+    ]);
+  });
+
   test("omits endpoint-local permission and incompatible entities with warnings", async () => {
     mockFetch(({ url }) => {
       if (url.pathname.endsWith("/auth/login")) return token();
@@ -202,6 +218,23 @@ describe("ESB Core discovery", () => {
     expect(answer.tables).toHaveLength(38);
     expect(answer.tables.some((table) => table.name === PRODUCTS.name)).toBe(false);
     expect(answer.warnings).toHaveLength(1);
+  });
+
+  test("keeps valid application codes fatal when another envelope field is malformed", async () => {
+    mockFetch(({ url }) => {
+      if (url.pathname.endsWith("/auth/login")) return token();
+      const object = objectForPath(url.pathname)!;
+      if (object === PRODUCTS) {
+        return Response.json(
+          { status: "fail", code: "EC03199999", message: null, result: null },
+          { status: 400 },
+        );
+      }
+      return object.mode === "direct" ? envelope([]) : page([], "", 1, 1);
+    });
+    await expect(
+      new EsbCoreConnector().discover({ credentials: CREDENTIALS, timeoutMs: 5_000 }),
+    ).rejects.toMatchObject({ code: "EC03199999", applicationFailure: true });
   });
 
   test("fails when no collection endpoint is readable", async () => {
@@ -288,6 +321,44 @@ describe("ESB Core query and count", () => {
       query({ joins: [{ fromTable: "products", toTable: "products", fromField: "productID", toField: "productID", fields: [] }] }),
     ];
     for (const request of invalid) await expect(collect(request)).rejects.toMatchObject({ status: expect.any(Number) });
+  });
+
+  test("rejects filter values that contradict catalog field types", async () => {
+    const invalid = [
+      query({ and: [{ field: "productName", op: "eq", value: true }] }),
+      query({
+        table: PRICELISTS.name,
+        and: [{ field: "priceDate", op: "eq", value: "2024-02-30" }],
+        fields: ["ID"],
+      }),
+      query({
+        table: ITEM_JOURNALS.name,
+        and: [{ field: "itemJournalDate", op: "eq", value: "not-a-datetime" }],
+        fields: ["itemJournalNum"],
+      }),
+      query({
+        table: ADVANCE_PAYMENTS.name,
+        and: [{ field: "paymentTotal", op: "eq", value: 1e-7 }],
+        fields: ["advancePaymentNum"],
+      }),
+    ];
+    for (const request of invalid) await expect(collect(request)).rejects.toMatchObject({ status: 400 });
+  });
+
+  test("normalizes documented boolean flags without validating unrequested fields", async () => {
+    mockObjectRows(CUSTOMERS, {
+      1: {
+        rows: [{ customerID: 1, customerName: { malformed: true }, flagActive: 1, lockVat: 0 }],
+      },
+    });
+    expect(
+      await collect(
+        query({
+          table: CUSTOMERS.name,
+          fields: ["customerID", "flagActive", "lockVat"],
+        }),
+      ),
+    ).toEqual([{ customerID: 1, flagActive: true, lockVat: false }]);
   });
 
   test("sorts multiple columns digit-exact with nulls last, then applies offset", async () => {

@@ -12,6 +12,8 @@ import {
 const CREDENTIALS = { username: "atlas-reader", password: "private-password" };
 const PRODUCTS = ESB_CORE_CATALOG.find((object) => object.name === "products")!;
 const BRANCHES = ESB_CORE_CATALOG.find((object) => object.name === "branches")!;
+const ITEM_JOURNALS = ESB_CORE_CATALOG.find((object) => object.name === "item_journals")!;
+const PRICELISTS = ESB_CORE_CATALOG.find((object) => object.name === "pricelists")!;
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -266,11 +268,63 @@ describe("ESB Core response validation and safe failures", () => {
     });
   });
 
+  test("normalizes valid rows and rejects values that contradict the catalog", async () => {
+    mockFetch(({ url }) =>
+      url.pathname.endsWith("/auth/login")
+        ? token("access", "refresh")
+        : envelope({
+            page: 1,
+            limit: 1,
+            data: [{ itemJournalNum: "IJ-1", itemJournalDate: "2024-01-01T09:00:00+07:00" }],
+            next: "",
+          }),
+    );
+    await expect(new EsbCoreApi(CREDENTIALS).collection(ITEM_JOURNALS, 1, 1, makeDeadline(100))).resolves.toMatchObject({
+      rows: [{ itemJournalNum: "IJ-1", itemJournalDate: "2024-01-01T02:00:00.000Z" }],
+    });
+
+    for (const [object, row] of [
+      [PRODUCTS, { productID: true }],
+      [PRODUCTS, { productID: "1e-7" }],
+      [PRICELISTS, { ID: 1, priceDate: "2024-02-30" }],
+      [ITEM_JOURNALS, { itemJournalNum: "IJ-1", itemJournalDate: "not-a-datetime" }],
+    ] as const) {
+      resetEsbCoreTokenCacheForTests();
+      mockFetch(({ url }) =>
+        url.pathname.endsWith("/auth/login")
+          ? token("access", "refresh")
+          : envelope({ page: 1, limit: 1, data: [row], next: "" }),
+      );
+      await expect(new EsbCoreApi(CREDENTIALS).collection(object, 1, 1, makeDeadline(100))).rejects.toMatchObject({
+        code: "malformed-response",
+      });
+    }
+  });
+
+  test("prioritizes a wrong page before malformed collection data", async () => {
+    for (const data of [[{ productID: true }], "not-an-array"]) {
+      resetEsbCoreTokenCacheForTests();
+      mockFetch(({ url }) =>
+        url.pathname.endsWith("/auth/login")
+          ? token("access", "refresh")
+          : envelope({ page: 2, limit: 1, data, next: "" }),
+      );
+      await expect(
+        new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(100)),
+      ).rejects.toMatchObject({ code: "non-progressing-page" });
+    }
+  });
+
   test("rejects malformed envelopes, rows, pages, limits, and continuation", async () => {
     const invalid = [
       {},
       { status: "ok", code: "EC03100000", result: { page: 2, limit: 1, data: [], next: "" } },
       { status: "ok", code: "EC03100000", result: { page: 1, limit: 0, data: [], next: "" } },
+      {
+        status: "ok",
+        code: "EC03100000",
+        result: { page: 1, limit: 1, data: [{ productID: 1 }, { productID: 2 }], next: "" },
+      },
       { status: "ok", code: "EC03100000", result: { page: 1, limit: 1, data: ["bad"], next: "" } },
       { status: "ok", code: "EC03100000", result: { page: 1, limit: 1, data: [], next: null } },
     ];
