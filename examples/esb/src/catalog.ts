@@ -61,7 +61,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "purchaseNum",
         type: "string",
         nullable: true,
-        description: "Purchase Number (nullable)",
+        description: "Purchase Number",
       },
       {
         name: "paymentTotal",
@@ -103,7 +103,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "linkAdvanceNumEsbGoods",
         type: "string",
         nullable: true,
-        description: "Link to ESB Goods Advance Number (nullable)",
+        description: "Link to ESB Goods Advance Number",
       },
       {
         name: "createdBy",
@@ -136,7 +136,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "adjustmentType",
         type: "string",
         nullable: true,
-        description: "Adjustment Type Name (Increase / Decrease)",
+        description: "Adjustment Type Name: Increase or Decrease",
       },
       {
         name: "coaNo",
@@ -211,7 +211,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "transactionDate",
         type: "date",
         nullable: true,
-        description: "Transaction Date (YYYY-MM-DD)",
+        description: "Transaction Date",
       },
       {
         name: "statusID",
@@ -331,7 +331,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "periodTypeID",
         type: "number",
         nullable: true,
-        description: "Period Type ID (1=Monthly, 2=Yearly)",
+        description: "Period Type ID: 1 for Monthly, 2 for Yearly",
       },
       {
         name: "periodType",
@@ -367,7 +367,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "statusID",
         type: "number",
         nullable: true,
-        description: "Status ID (1=New, 3=Authorized)",
+        description: "Status ID: 1 for New, 3 for Authorized",
       },
       {
         name: "statusName",
@@ -394,7 +394,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "employeeAdvanceNum",
         type: "string",
         nullable: false,
-        description: "Advance payment number (prefix: EA)",
+        description: "Advance payment number with EA prefix",
       },
       {
         name: "employeeAdvanceDate",
@@ -466,7 +466,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "statusID",
         type: "number",
         nullable: true,
-        description: "Status ID (1=New, 2=Rejected, 3=Authorized, 27=Released)",
+        description: "Status ID: 1 for New, 2 for Rejected, 3 for Authorized, 27 for Released",
       },
       {
         name: "statusName",
@@ -1201,7 +1201,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "priceDate",
-        type: "datetime",
+        type: "date",
         nullable: true,
         description: "Pricelist active date",
       },
@@ -1375,7 +1375,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "flagActive",
         type: "number",
         nullable: true,
-        description: "Flag setting for Active or not Supplier Category (1 Active, 0 Not Active)",
+        description: "Flag setting for Active or not Supplier Category: 1 Active, 0 Not Active",
       },
     ],
   },
@@ -1414,7 +1414,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "dueDate",
         type: "number",
         nullable: true,
-        description: "Credit Terms (Days)",
+        description: "Credit Terms in Days",
       },
       {
         name: "flagActive",
@@ -1531,7 +1531,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "memorialJournalNum",
         type: "string",
         nullable: false,
-        description: "Memorial Journal number (primary key, prefix: MJ)",
+        description: "Memorial Journal number with MJ prefix",
       },
       {
         name: "memorialJournalDate",
@@ -1549,7 +1549,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "statusID",
         type: "number",
         nullable: true,
-        description: "Status ID (1=New, 2=Rejected, 3=Authorized, 38=Waiting For Approval)",
+        description: "Status ID: 1 for New, 2 for Rejected, 3 for Authorized, 38 for Waiting For Approval",
       },
       {
         name: "statusName",
@@ -1750,7 +1750,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "currencySign",
         type: "string",
         nullable: true,
-        description: 'Currency Symbol (e.g. "IDR", "USD")',
+        description: 'Currency Symbol, such as "IDR" or "USD"',
       },
       {
         name: "invoiceTotal",
@@ -1762,7 +1762,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "linkInvoiceNumEsbGoods",
         type: "string",
         nullable: true,
-        description: "Linked ESB Goods Invoice Number (if any)",
+        description: "Linked ESB Goods Invoice Number when available",
       },
       {
         name: "overDue",
@@ -1774,13 +1774,13 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "purchaseInvoiceDate",
         type: "date",
         nullable: true,
-        description: "Purchase Invoice Date (Format: yyyy-mm-dd)",
+        description: "Purchase Invoice Date",
       },
       {
         name: "purchaseInvoiceDueDate",
         type: "date",
         nullable: true,
-        description: "Purchase Invoice Due Date (Format: yyyy-mm-dd)",
+        description: "Purchase Invoice Due Date",
       },
       {
         name: "purchaseInvoiceNum",
@@ -1798,7 +1798,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "statusName",
         type: "string",
         nullable: true,
-        description: 'Status Name (e.g. "New", "Authorized", "Rejected", "Full Paid", "Draft")',
+        description: 'Status Name, such as "New", "Authorized", "Rejected", "Full Paid", or "Draft"',
       },
       {
         name: "supplierID",
@@ -1810,7 +1810,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "supplierInvoiceNum",
         type: "string",
         nullable: true,
-        description: "Supplier Invoice Number (if any)",
+        description: "Supplier Invoice Number when available",
       },
       {
         name: "supplierName",
@@ -1822,7 +1822,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "additionalInfo",
         type: "string",
         nullable: true,
-        description: "Additional information (if any)",
+        description: "Additional information",
       },
     ],
   },
@@ -2047,7 +2047,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "purchaseReturnDate",
         type: "date",
         nullable: true,
-        description: "Purchase Return Date (Format: yyyy-mm-dd)",
+        description: "Purchase Return Date",
       },
       {
         name: "branchID",
@@ -2083,7 +2083,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
         name: "statusName",
         type: "string",
         nullable: true,
-        description: 'Status Name (e.g. "New", "Rejected", "Authorized", "Full Paid", "Draft")',
+        description: 'Status Name, such as "New", "Rejected", "Authorized", "Full Paid", or "Draft"',
       },
     ],
   },
@@ -2102,7 +2102,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "receiptDate",
-        type: "datetime",
+        type: "date",
         nullable: true,
         description: "Receipt Date",
       },

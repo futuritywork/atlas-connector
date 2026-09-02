@@ -19,7 +19,8 @@ import {
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
 import { ESB_CORE_CATALOG } from "./catalog";
-import type { EsbCoreObject} from "./types";
+import { createFilterSetSchema, EsbDatetimeValue } from "./schemas";
+import type { EsbCoreObject } from "./types";
 import {
   EsbCoreApi,
   EsbCoreError,
@@ -31,7 +32,6 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 20_000;
 const PROBE_CONCURRENCY = 4;
 const TRANSIENT_STATUSES = new Set([408, 425, 429]);
-const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
 
 type QueryShape = {
   table: string;
@@ -135,12 +135,6 @@ function project(rows: SourceRow[], fields: string[]): SourceRow[] {
   });
 }
 
-function normalizeDatetime(type: AtlasType, value: AtlasValue): AtlasValue {
-  if (type !== "datetime" || typeof value !== "string" || !RFC3339_WITH_ZONE.test(value)) return value;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
-}
-
 function normalizeRow(
   object: EsbCoreObject,
   fields: Iterable<string>,
@@ -158,7 +152,7 @@ function normalizeRow(
     ) {
       throw new Error(`esb-core: ${object.name} returned a non-scalar value for ${field}`);
     }
-    normalized[field] = normalizeDatetime(fieldTypes.get(field) ?? "string", raw);
+    normalized[field] = fieldTypes.get(field) === "datetime" ? EsbDatetimeValue.parse(raw) : raw;
   }
   if (object.primaryKey && normalized[object.primaryKey] === null) {
     throw new Error(`esb-core: ${object.name} returned a row without a scalar ${object.primaryKey}`);
@@ -296,9 +290,10 @@ export class EsbCoreConnector extends AtlasConnector {
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
     const fieldTypes = Object.fromEntries(object.columns.map((column) => [column.name, column.type]));
+    const filters = createFilterSetSchema(fieldTypes).parse({ and: req.and, or: req.or });
     for await (const batch of this.scan(api, req, deadline)) {
       deadline.check();
-      const filtered = applyFilters(batch, { and: req.and, or: req.or }, fieldTypes);
+      const filtered = applyFilters(batch, filters, fieldTypes);
       deadline.check();
       yield filtered;
     }

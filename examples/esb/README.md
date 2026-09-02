@@ -66,8 +66,9 @@ The connector:
 - evaluates every advertised filter locally with the SDK's `applyFilters`;
 - supports multi-column, digit-exact sorting with nulls last, offset, projection,
   limits, and scan counts;
-- converts RFC 3339 datetimes carrying `Z` or a numeric offset to UTC, while
-  preserving zone-less values unchanged;
+- converts ISO 8601 datetime cells and matching filter operands carrying `Z` or
+  a numeric offset to UTC, while preserving zone-less values unchanged;
+- exposes date-only fields documented as `YYYY-MM-DD` as Atlas `date` values;
 - leaves aggregate pushdown unadvertised and inherits the SDK's scan-based
   profiling methods.
 

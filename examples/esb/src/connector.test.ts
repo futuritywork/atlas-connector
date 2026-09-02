@@ -18,6 +18,8 @@ const PRODUCTS = ESB_CORE_CATALOG.find((object) => object.name === "products")!;
 const BRANCHES = ESB_CORE_CATALOG.find((object) => object.name === "branches")!;
 const ADVANCE_PAYMENTS = ESB_CORE_CATALOG.find((object) => object.name === "advance_payments")!;
 const ITEM_JOURNALS = ESB_CORE_CATALOG.find((object) => object.name === "item_journals")!;
+const PRICELISTS = ESB_CORE_CATALOG.find((object) => object.name === "pricelists")!;
+const RECEIPTS = ESB_CORE_CATALOG.find((object) => object.name === "receipts")!;
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -116,6 +118,23 @@ describe("ESB Core capability and catalog", () => {
       expect(new Set(object.columns.map((column) => column.name)).size).toBe(object.columns.length);
       if (object.primaryKey) expect(object.columns.some((column) => column.name === object.primaryKey)).toBe(true);
     }
+  });
+
+  test("uses plain descriptions and advertises documented date-only fields as dates", () => {
+    const parentheticalDescriptions = ESB_CORE_CATALOG.flatMap((object) =>
+      object.columns
+        .filter((column) => /[()]/.test(column.description))
+        .map((column) => `${object.name}.${column.name}`),
+    );
+    expect(parentheticalDescriptions).toEqual([]);
+    expect(PRICELISTS.columns.find((column) => column.name === "priceDate")).toMatchObject({
+      type: "date",
+      description: "Pricelist active date",
+    });
+    expect(RECEIPTS.columns.find((column) => column.name === "receiptDate")).toMatchObject({
+      type: "date",
+      description: "Receipt Date",
+    });
   });
 
   test("catalog validation rejects duplicate tables, duplicate fields, and undeclared keys", () => {
@@ -310,6 +329,48 @@ describe("ESB Core query and count", () => {
     expect(pagedCalls.at(-1)?.url.searchParams.get("page")).toBe("2");
   });
 
+  test("preserves and filters catalog date values as YYYY-MM-DD", async () => {
+    mockObjectRows(PRICELISTS, {
+      1: {
+        rows: [
+          { ID: 1, priceDate: "2024-01-01" },
+          { ID: 2, priceDate: "2024-01-02" },
+        ],
+      },
+    });
+    expect(
+      await collect(
+        query({
+          table: PRICELISTS.name,
+          and: [{ field: "priceDate", op: "eq", value: "2024-01-01" }],
+          fields: ["ID", "priceDate"],
+        }),
+      ),
+    ).toEqual([{ ID: 1, priceDate: "2024-01-01" }]);
+
+    resetEsbCoreTokenCacheForTests();
+    mockObjectRows(RECEIPTS, {
+      1: {
+        rows: [
+          { receiptNum: "a", receiptDate: "2024-01-01" },
+          { receiptNum: "b", receiptDate: "2024-01-03" },
+        ],
+      },
+    });
+    expect(
+      await collect(
+        query({
+          table: RECEIPTS.name,
+          and: [
+            { field: "receiptDate", op: "gte", value: "2024-01-02" },
+            { field: "receiptDate", op: "lte", value: "2024-01-03" },
+          ],
+          fields: ["receiptNum", "receiptDate"],
+        }),
+      ),
+    ).toEqual([{ receiptNum: "b", receiptDate: "2024-01-03" }]);
+  });
+
   test("normalizes explicit-zone datetimes and preserves zone-less text", async () => {
     mockObjectRows(ITEM_JOURNALS, {
       1: {
@@ -326,6 +387,51 @@ describe("ESB Core query and count", () => {
       { itemJournalNum: "a", itemJournalDate: "2024-01-01T02:00:00.000Z" },
       { itemJournalNum: "b", itemJournalDate: "2024-01-01T09:00:00" },
     ]);
+  });
+
+  test("canonicalizes datetime operands in and/or scalar and set filters", async () => {
+    mockObjectRows(ITEM_JOURNALS, {
+      1: {
+        rows: [
+          { itemJournalNum: "a", itemJournalDate: "2024-01-01T09:00:00+07:00" },
+          { itemJournalNum: "b", itemJournalDate: "2024-01-01T03:00:00Z" },
+          { itemJournalNum: "c", itemJournalDate: null },
+        ],
+      },
+    });
+    const matchingKeys = async (overrides: Partial<NativeQueryRequest>): Promise<unknown[]> => {
+      const rows = await collect(
+        query({
+          table: ITEM_JOURNALS.name,
+          fields: ["itemJournalNum"],
+          ...overrides,
+        }),
+      );
+      return rows.map((row) => row.itemJournalNum);
+    };
+
+    expect(
+      await matchingKeys({ and: [{ field: "itemJournalDate", op: "eq", value: "2024-01-01T02:00:00Z" }] }),
+    ).toEqual(["a"]);
+    expect(
+      await matchingKeys({
+        and: [
+          { field: "itemJournalDate", op: "gte", value: "2024-01-01T02:00:00+00:00" },
+          { field: "itemJournalDate", op: "lte", value: "2024-01-01T09:00:00+07:00" },
+        ],
+      }),
+    ).toEqual(["a"]);
+    expect(
+      await matchingKeys({
+        and: [],
+        or: [[{ field: "itemJournalDate", op: "in", values: ["2024-01-01T09:00:00+07:00"] }]],
+      }),
+    ).toEqual(["a"]);
+    expect(
+      await matchingKeys({
+        and: [{ field: "itemJournalDate", op: "nin", values: ["2024-01-01T02:00:00Z", null] }],
+      }),
+    ).toEqual(["b", "c"]);
   });
 
   test("rejects missing, structured, and non-finite primary keys", async () => {
