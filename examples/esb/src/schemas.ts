@@ -1,4 +1,8 @@
 import {
+  AtlasBoolean,
+  AtlasDate,
+  AtlasDatetime,
+  AtlasNumeric,
   AtlasValue,
   Filter,
   type AtlasType,
@@ -7,7 +11,6 @@ import {
 import { z } from "zod";
 import type { EsbCoreObject } from "./types";
 
-const DECIMAL_TEXT = /^[+-]?\d+(?:\.\d+)?$/;
 const COMPARATOR_OPS = ["eq", "neq", "gt", "gte", "lt", "lte"] as const;
 const COMPARATOR_OP_SET: ReadonlySet<string> = new Set(COMPARATOR_OPS);
 const ComparatorOp = z.enum(COMPARATOR_OPS);
@@ -16,69 +19,59 @@ const CanonicalDatetime = z
   .iso.datetime({ offset: true })
   .pipe(z.coerce.date())
   .transform((value) => value.toISOString());
-const ZoneLessDatetime = z.iso.datetime({ local: true });
-const EsbDatetime = z.union([CanonicalDatetime, ZoneLessDatetime]);
-const EsbDate = z.iso.date();
-const EsbBoolean = z.union([z.boolean(), z.literal(0), z.literal(1)]).transform(Boolean);
-const EsbNumeric = z.union([
-  z.string().regex(DECIMAL_TEXT),
-  z
-    .number()
-    .refine(
-      (value) => DECIMAL_TEXT.test(String(value)) && (!Number.isInteger(value) || Number.isSafeInteger(value)),
-    ),
-]);
+const EsbDatetime = z.union([CanonicalDatetime, AtlasDatetime]);
+const EsbBoolean = z.union([AtlasBoolean, z.literal(0), z.literal(1)]).transform(Boolean);
 
 export const EsbDatetimeValue = EsbDatetime.nullable();
-export const EsbDateValue = EsbDate.nullable();
+export const EsbDateValue = AtlasDate.nullable();
 
-export const EsbEnvelopeSchema = z.looseObject({});
-export type EsbEnvelope = z.infer<typeof EsbEnvelopeSchema>;
+export const EsbEnvelope = z.looseObject({});
+export type EsbEnvelope = z.infer<typeof EsbEnvelope>;
 
-export const EsbSuccessEnvelopeSchema = z.looseObject({
+export const EsbSuccessEnvelope = z.looseObject({
   status: z.literal("ok"),
   code: z.literal("EC03100000"),
   result: z.unknown(),
 });
 
-export const EsbFailureEnvelopeSchema = z.looseObject({
+export const EsbFailureEnvelope = z.looseObject({
   status: z.literal("fail"),
   code: z.string().regex(/^EC\d{8}$/),
 });
 
-export const EsbMessageEnvelopeSchema = z.looseObject({ message: z.string() });
-export const EsbPagedCollectionPageSchema = z.looseObject({ page: z.number().int() });
-export const EsbPagedCollectionHeaderSchema = EsbPagedCollectionPageSchema.extend({
+export const EsbMessageEnvelope = z.looseObject({ message: z.string() });
+export const EsbPagedCollectionPage = z.looseObject({ page: z.number().int() });
+export const EsbPagedCollectionHeader = EsbPagedCollectionPage.extend({
   limit: z.number().int().min(1),
   data: z.array(z.unknown()),
   next: z.string(),
 }).refine((page) => page.data.length <= page.limit, { path: ["limit"] });
 
-export const EsbTokenResultSchema = z.looseObject({
+export const EsbTokenResult = z.looseObject({
   accessToken: z.string().min(1),
   refreshToken: z.string().min(1),
 });
 
-export const EsbCoreCredentialsSchema = z.object({
+export const EsbCoreCredentials = z.object({
   username: z.string().trim().min(1),
   password: z.string().min(1),
 });
-export type EsbCoreCredentials = z.infer<typeof EsbCoreCredentialsSchema>;
+export type EsbCoreCredentials = z.infer<typeof EsbCoreCredentials>;
 
-const PortSchema = z
+const Port = z
   .string()
   .regex(/^\d+$/)
   .transform(Number)
   .pipe(z.number().int().min(1).max(65_535));
-const ConfigSchema = z.object({
-  port: PortSchema,
+const Config = z.object({
+  port: Port,
   bearerToken: z.string().min(32),
 });
 
 export function parseEsbConfig(
   env: Readonly<Record<string, string | undefined>>,
 ): { port: number; bearerToken: string } {
-  const result = ConfigSchema.safeParse({
+  const result = Config.safeParse({
     port: env.PORT ?? env.CONNECTOR_PORT ?? "4100",
     bearerToken: env.ATLAS_CONNECTOR_TOKEN,
   });
@@ -89,7 +82,7 @@ export function parseEsbConfig(
   throw new Error("ATLAS_CONNECTOR_TOKEN must be set to at least 32 characters");
 }
 
-function rowValueSchema(type: AtlasType): z.ZodType<AtlasValue> {
+function rowValue(type: AtlasType): z.ZodType<AtlasValue> {
   switch (type) {
     case "string":
     case "reference":
@@ -98,58 +91,58 @@ function rowValueSchema(type: AtlasType): z.ZodType<AtlasValue> {
       return z.string();
     case "number":
     case "decimal":
-      return EsbNumeric;
+      return AtlasNumeric;
     case "boolean":
       return EsbBoolean;
     case "date":
-      return EsbDate;
+      return AtlasDate;
     case "datetime":
       return EsbDatetime;
   }
 }
 
-const fullRowSchemas = new WeakMap<EsbCoreObject, z.ZodType<SourceRow>>();
-const projectedRowSchemas = new WeakMap<readonly string[], WeakMap<EsbCoreObject, z.ZodType<SourceRow>>>();
+const fullRows = new WeakMap<EsbCoreObject, z.ZodType<SourceRow>>();
+const projectedRows = new WeakMap<readonly string[], WeakMap<EsbCoreObject, z.ZodType<SourceRow>>>();
 
-function cachedRowSchema(object: EsbCoreObject, fields?: readonly string[]): z.ZodType<SourceRow> | undefined {
-  return fields === undefined ? fullRowSchemas.get(object) : projectedRowSchemas.get(fields)?.get(object);
+function cachedRow(object: EsbCoreObject, fields?: readonly string[]): z.ZodType<SourceRow> | undefined {
+  return fields === undefined ? fullRows.get(object) : projectedRows.get(fields)?.get(object);
 }
 
-function cacheRowSchema(
+function cacheRow(
   object: EsbCoreObject,
   fields: readonly string[] | undefined,
   schema: z.ZodType<SourceRow>,
 ): void {
   if (fields === undefined) {
-    fullRowSchemas.set(object, schema);
+    fullRows.set(object, schema);
     return;
   }
-  const byObject = projectedRowSchemas.get(fields) ?? new WeakMap<EsbCoreObject, z.ZodType<SourceRow>>();
+  const byObject = projectedRows.get(fields) ?? new WeakMap<EsbCoreObject, z.ZodType<SourceRow>>();
   byObject.set(object, schema);
-  projectedRowSchemas.set(fields, byObject);
+  projectedRows.set(fields, byObject);
 }
 
-export function createRowSchema(object: EsbCoreObject, fields?: readonly string[]): z.ZodType<SourceRow> {
-  const cached = cachedRowSchema(object, fields);
+export function EsbRow(object: EsbCoreObject, fields?: readonly string[]): z.ZodType<SourceRow> {
+  const cached = cachedRow(object, fields);
   if (cached) return cached;
 
   const selected = fields === undefined ? undefined : new Set(fields);
   const shape: Record<string, z.ZodType<AtlasValue | undefined>> = {};
   for (const column of object.columns) {
     if (selected && !selected.has(column.name)) continue;
-    const value = rowValueSchema(column.type);
+    const value = rowValue(column.type);
     shape[column.name] = column.nullable ? value.nullable().optional() : value;
   }
   const schema = z.object(shape).strip().pipe(z.record(z.string(), AtlasValue));
-  cacheRowSchema(object, fields, schema);
+  cacheRow(object, fields, schema);
   return schema;
 }
 
-export function createCollectionRowsSchema(
+export function EsbCollectionRows(
   object: EsbCoreObject,
   fields?: readonly string[],
 ): z.ZodType<SourceRow[]> {
-  return z.array(createRowSchema(object, fields));
+  return z.array(EsbRow(object, fields));
 }
 
 const [ValueFilter, MemberFilter] = Filter.options;
@@ -158,7 +151,7 @@ if (!("value" in ValueFilter.shape) || !("values" in MemberFilter.shape)) {
 }
 
 const StringFilterValue = z.string().nullable();
-const NumericFilterValue = EsbNumeric.nullable();
+const NumericFilterValue = AtlasNumeric.nullable();
 const BooleanFilterValue = z.boolean().nullable();
 
 type FilterSet = {
@@ -166,7 +159,7 @@ type FilterSet = {
   or?: Filter[][];
 };
 
-export function createFilterSetSchema(
+export function EsbFilterSet(
   fieldTypes: Readonly<Record<string, AtlasType>>,
 ): z.ZodType<FilterSet> {
   const fieldOfType = (...types: AtlasType[]) =>

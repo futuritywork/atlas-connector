@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { EsbCoreObject } from "./types";
 import {
-  createFilterSetSchema,
-  createRowSchema,
   EsbDateValue,
   EsbDatetimeValue,
+  EsbFilterSet,
+  EsbRow,
   parseEsbConfig,
 } from "./schemas";
 
@@ -61,7 +61,7 @@ describe("ESB value schemas", () => {
 
   test("builds catalog-derived row schemas that normalize and enforce field types", () => {
     expect(
-      createRowSchema(TYPED_OBJECT).parse({
+      EsbRow(TYPED_OBJECT).parse({
         id: "one",
         businessDate: "2024-01-01",
         happenedAt: "2024-01-01T09:00:00+07:00",
@@ -76,7 +76,7 @@ describe("ESB value schemas", () => {
       amount: "10.50",
       enabled: true,
     });
-    expect(createRowSchema(TYPED_OBJECT).parse({ id: "one" })).toEqual({ id: "one" });
+    expect(EsbRow(TYPED_OBJECT).parse({ id: "one" })).toEqual({ id: "one" });
 
     for (const row of [
       { id: null },
@@ -86,7 +86,7 @@ describe("ESB value schemas", () => {
       { id: "one", amount: Number.MAX_SAFE_INTEGER + 1 },
       { id: "one", enabled: 2 },
     ]) {
-      expect(createRowSchema(TYPED_OBJECT).safeParse(row).success).toBe(false);
+      expect(EsbRow(TYPED_OBJECT).safeParse(row).success).toBe(false);
     }
   });
 });
@@ -106,7 +106,7 @@ describe("ESB filter schemas", () => {
       ],
     };
 
-    expect(createFilterSetSchema(FIELD_TYPES).parse(filters)).toEqual({
+    expect(EsbFilterSet(FIELD_TYPES).parse(filters)).toEqual({
       and: [
         { field: "happenedAt", op: "eq", value: "2024-01-01T02:00:00.000Z" },
         { field: "businessDate", op: "eq", value: "2024-01-01" },
@@ -122,7 +122,7 @@ describe("ESB filter schemas", () => {
   });
 
   test("rejects operands that contradict catalog types", () => {
-    const schema = createFilterSetSchema(FIELD_TYPES);
+    const schema = EsbFilterSet(FIELD_TYPES);
     for (const filter of [
       { field: "happenedAt", op: "eq", value: "not-a-datetime" },
       { field: "businessDate", op: "in", values: ["2024-02-30"] },
@@ -136,7 +136,7 @@ describe("ESB filter schemas", () => {
   });
 
   test("retains textual and strict Atlas filter behavior", () => {
-    const schema = createFilterSetSchema(FIELD_TYPES);
+    const schema = EsbFilterSet(FIELD_TYPES);
     expect(
       schema.parse({ and: [{ field: "businessDate", op: "startswith", value: "2024" }] }),
     ).toEqual({ and: [{ field: "businessDate", op: "startswith", value: "2024" }] });

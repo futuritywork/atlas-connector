@@ -157,7 +157,9 @@ REST/ERP paths. Before registering a connector with Atlas, grade it with the
 **Vocabulary** (`ATLAS_TYPES`/`AtlasType`, `AtlasValue`, `OPS`/`Op`, `Filter`,
 `UserSort`, `JoinField`, `DATE_GRAINS`/`DateGrain`, `SourceRow`): the shared
 protocol types. `SourceRow` is the wire-legal row a connector returns:
-`Record<string, string | number | boolean | null>`.
+`Record<string, string | number | boolean | null>`. `AtlasNumeric`,
+`AtlasBoolean`, `AtlasDate`, and `AtlasDatetime` validate a
+scalar once its catalog type is known.
 
 **Wire schemas**: every request (`CheckRequest`, `DiscoveryRequest`,
 `NativeQueryRequest`, `NativeQueryStreamRequest`, `CountRequest`,

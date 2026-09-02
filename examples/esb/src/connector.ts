@@ -20,7 +20,7 @@ import {
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
 import { ESB_CORE_CATALOG } from "./catalog";
-import { createFilterSetSchema } from "./schemas";
+import { EsbFilterSet } from "./schemas";
 import type { EsbCoreObject } from "./types";
 import {
   EsbCoreApi,
@@ -266,7 +266,7 @@ export class EsbCoreConnector extends AtlasConnector {
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
     const fieldTypes = Object.fromEntries(object.columns.map((column) => [column.name, column.type]));
-    const parsedFilters = createFilterSetSchema(fieldTypes).safeParse({ and: req.and, or: req.or });
+    const parsedFilters = EsbFilterSet(fieldTypes).safeParse({ and: req.and, or: req.or });
     if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
     for await (const batch of this.scan(api, req, deadline)) {
       deadline.check();

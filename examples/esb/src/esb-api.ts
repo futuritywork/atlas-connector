@@ -6,17 +6,15 @@ import {
   type SourceRow,
 } from "@futurity/atlas-connector";
 import {
-  createCollectionRowsSchema,
-  EsbCoreCredentialsSchema,
-  EsbEnvelopeSchema,
-  EsbFailureEnvelopeSchema,
-  EsbMessageEnvelopeSchema,
-  EsbPagedCollectionHeaderSchema,
-  EsbPagedCollectionPageSchema,
-  EsbSuccessEnvelopeSchema,
-  EsbTokenResultSchema,
-  type EsbCoreCredentials,
-  type EsbEnvelope,
+  EsbCollectionRows,
+  EsbCoreCredentials,
+  EsbEnvelope,
+  EsbFailureEnvelope,
+  EsbMessageEnvelope,
+  EsbPagedCollectionHeader,
+  EsbPagedCollectionPage,
+  EsbSuccessEnvelope,
+  EsbTokenResult,
 } from "./schemas";
 import type { EsbCoreObject } from "./types";
 
@@ -83,12 +81,12 @@ function sanitizeCode(code: string): string {
 }
 
 function failureCode(envelope?: EsbEnvelope): string | null {
-  const parsed = EsbFailureEnvelopeSchema.safeParse(envelope);
+  const parsed = EsbFailureEnvelope.safeParse(envelope);
   return parsed.success ? parsed.data.code : null;
 }
 
 function failureMessage(response: WireResponse): string | null {
-  const parsed = EsbMessageEnvelopeSchema.safeParse(response.envelope);
+  const parsed = EsbMessageEnvelope.safeParse(response.envelope);
   return parsed.success ? parsed.data.message.trim().toLowerCase() : null;
 }
 
@@ -110,7 +108,7 @@ function collectionUnauthorized(response: WireResponse): boolean {
 }
 
 function credentialsFrom(input: Credentials): EsbCoreCredentials {
-  const parsed = EsbCoreCredentialsSchema.safeParse(input);
+  const parsed = EsbCoreCredentials.safeParse(input);
   if (parsed.success) return parsed.data;
   if (parsed.error.issues.some((issue) => issue.path[0] === "username")) {
     throw badRequest("ESB Core username is required");
@@ -204,7 +202,7 @@ function parseResponseEnvelope(status: number, body: string): WireResponse {
     if (!isSuccessfulStatus(status)) return { status };
     throw new Error(`ESB Core HTTP ${status}: response was not valid JSON`);
   }
-  const parsed = EsbEnvelopeSchema.safeParse(raw);
+  const parsed = EsbEnvelope.safeParse(raw);
   if (!parsed.success) {
     if (!isSuccessfulStatus(status)) return { status };
     throw new Error(`ESB Core HTTP ${status}: response envelope was malformed`);
@@ -317,7 +315,7 @@ export class EsbCoreApi {
         { credentialFailure, status: response.status, requestToken },
       );
     }
-    const success = EsbSuccessEnvelopeSchema.safeParse(response.envelope);
+    const success = EsbSuccessEnvelope.safeParse(response.envelope);
     if (!success.success) {
       if (code !== null) {
         const credentialFailure = code === "EC03100001" || (endpoint === "login" && code === "EC03100032");
@@ -333,7 +331,7 @@ export class EsbCoreApi {
         requestToken,
       });
     }
-    const result = EsbTokenResultSchema.safeParse(success.data.result);
+    const result = EsbTokenResult.safeParse(success.data.result);
     if (!result.success) {
       throw this.error("invalid-token-response", "token response was malformed", {
         status: response.status,
@@ -489,7 +487,7 @@ export class EsbCoreApi {
         requestToken,
       });
     }
-    const success = EsbSuccessEnvelopeSchema.safeParse(response.envelope);
+    const success = EsbSuccessEnvelope.safeParse(response.envelope);
     if (!success.success) {
       if (code !== null) {
         throw this.error(code, sanitizedDetail(response.status), {
@@ -505,7 +503,7 @@ export class EsbCoreApi {
 
     const result = success.data.result;
     if (object.mode === "direct") {
-      const parsed = createCollectionRowsSchema(object, fields).safeParse(result);
+      const parsed = EsbCollectionRows(object, fields).safeParse(result);
       if (!parsed.success) {
         throw this.error("malformed-response", collectionDetail(object, malformedRowsDetail(object, parsed.error.issues)), {
           status: response.status,
@@ -514,20 +512,20 @@ export class EsbCoreApi {
       return { rows: parsed.data, hasNext: false };
     }
 
-    const returnedPage = EsbPagedCollectionPageSchema.safeParse(result);
+    const returnedPage = EsbPagedCollectionPage.safeParse(result);
     if (!returnedPage.success || returnedPage.data.page !== page) {
       throw this.error("non-progressing-page", collectionDetail(object, "returned a different or malformed page"), {
         status: response.status,
       });
     }
-    const header = EsbPagedCollectionHeaderSchema.safeParse(result);
+    const header = EsbPagedCollectionHeader.safeParse(result);
     if (!header.success) {
       throw this.error("malformed-response", collectionDetail(object, "collection response was malformed"), {
         status: response.status,
       });
     }
 
-    const parsed = createCollectionRowsSchema(object, fields).safeParse(header.data.data);
+    const parsed = EsbCollectionRows(object, fields).safeParse(header.data.data);
     if (!parsed.success) {
       throw this.error("malformed-response", collectionDetail(object, malformedRowsDetail(object, parsed.error.issues)), {
         status: response.status,
