@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   CONNECTOR_LIMITS,
   createApp,
+  OPS,
   type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
@@ -98,6 +99,7 @@ describe("ESB Core capability and catalog", () => {
       probeConcurrency: 4,
       cheapProbes: false,
     });
+    expect(ATLAS_JSON.capabilities.operators).toEqual(OPS.filter((op) => op !== "contains"));
     expect(ATLAS_JSON.credentialSchema.map((field) => [field.key, field.type, field.required])).toEqual([
       ["username", "text", true],
       ["password", "password", true],

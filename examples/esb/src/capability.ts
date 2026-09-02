@@ -4,7 +4,7 @@ export const ATLAS_JSON: AtlasJson = {
   protocolVersion: 1,
   slug: "esb-core",
   capabilities: {
-    operators: [...OPS],
+    operators: OPS.filter((op) => op !== "contains"),
     dateBucket: false,
     sort: "multi",
     offset: true,
