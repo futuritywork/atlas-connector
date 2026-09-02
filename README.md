@@ -32,9 +32,10 @@ with the key absent. Give every field a `placeholder` and a `help` string:
 `help` is short markdown rendered between the label and the input, and it
 should name the exact page in the vendor's console the value is copied from and
 link the vendor's doc for it. Nothing upstream is configured in the connector's
-environment and nothing is persisted between requests, so one deployment serves
-any number of tenants, an added tenant is a form someone fills in, and a leaked
-connector process holds no customer secret to leak.
+environment, so one deployment can serve any number of tenants and an added
+tenant is a form someone fills in. Connectors must not persist raw credentials;
+when an upstream requires session reuse, cache only short-lived tokens under a
+one-way credential digest, as the ESB Core example does.
 
 ## Quickstart: a SQL database
 
@@ -130,7 +131,10 @@ that matched it), and `columnCountsFromValues` / `linkFromValues` /
 A REST connector authors its own `capability.ts`, the honesty contract. Only
 you know which ops your pushdown + `applyFilters` combination honors, and only
 you know which credentials your API needs; every flag is earned, and the
-starter begins narrow.
+starter begins narrow. See [`examples/lark`](examples/lark) for a metadata-led
+REST source and [`examples/esb`](examples/esb) for a complete fixed-catalog ERP
+connector with strict envelopes, partial discovery, paging, sorting, and
+process-local token coordination.
 
 ## The protocol
 
@@ -142,8 +146,8 @@ bearer-guarded POST endpoints (`/check`, `/discovery`, `/query`,
 `credentials` and `timeoutMs`. The wire contract is defined, executably, by the
 Zod schemas in [`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers,
 stream lines) and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the
-capability doc). [`examples/`](examples) holds two complete connectors, one per
-path. Before registering a connector with Atlas, grade it with the
+capability doc). [`examples/`](examples) holds three complete connectors across the SQL and
+REST/ERP paths. Before registering a connector with Atlas, grade it with the
 `atlas-conform` conformance runner.
 
 ## API reference
