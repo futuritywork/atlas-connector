@@ -7,199 +7,36 @@ import {
   unknownEntity,
   unsupported,
   type AtlasType,
-  type AtlasValue,
   type CheckRequest,
   type CountRequest,
-  type DiscoveredField,
-  type DiscoveredTable,
   type DiscoveryAnswer,
   type DiscoveryRequest,
-  type Filter,
   type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
 import { ESB_CORE_CATALOG } from "./catalog";
+import {
+  discoveryWarning,
+  isOmittableDiscoveryError,
+  mapConcurrent,
+  PROBE_CONCURRENCY,
+  toDiscoveredTable,
+  toInaccessibleVerdict,
+  type AvailabilityVerdict,
+} from "./helpers/discovery";
+import {
+  collectNeededColumns,
+  projectRows,
+  sortRows,
+  type QueryShape,
+} from "./helpers/query";
 import { EsbFilterSet } from "./schemas";
 import type { EsbCoreObject } from "./types";
-import {
-  EsbCoreApi,
-  EsbCoreError,
-  makeDeadline,
-  type Deadline,
-} from "./esb-api";
+import { EsbCoreApi, makeDeadline, type Deadline } from "./esb-api";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20_000;
-const PROBE_CONCURRENCY = 4;
-const TRANSIENT_STATUSES = new Set([408, 425, 429]);
-
-type QueryShape = {
-  table: string;
-  and: Filter[];
-  or?: Filter[][];
-  fields: string[];
-  sort?: Array<{ field: string; dir: "asc" | "desc" }>;
-  joins?: unknown[];
-};
-
-type UnavailabilityReason = "permission" | "unavailable" | "rejected" | "incompatible";
-
-type AvailabilityVerdict =
-  | { object: EsbCoreObject; accessible: true }
-  | {
-      object: EsbCoreObject;
-      accessible: false;
-      reason: UnavailabilityReason;
-      status: number;
-      code: string;
-    };
-
-type Decimal = { negative: boolean; int: string; frac: string };
-const DECIMAL_TEXT = /^([+-]?)(\d+)(?:\.(\d+))?$/;
-
-function byteOrderCompare(a: string, b: string): number {
-  let index = 0;
-  while (index < a.length && index < b.length) {
-    const left = a.codePointAt(index) as number;
-    const right = b.codePointAt(index) as number;
-    if (left !== right) return left < right ? -1 : 1;
-    index += left > 0xffff ? 2 : 1;
-  }
-  if (a.length === b.length) return 0;
-  return a.length < b.length ? -1 : 1;
-}
-
-function parseDecimal(text: string): Decimal | null {
-  const match = DECIMAL_TEXT.exec(text);
-  if (!match) return null;
-  const int = (match[2] as string).replace(/^0+(?=\d)/, "");
-  const frac = (match[3] ?? "").replace(/0+$/, "");
-  const negative = match[1] === "-" && !(int === "0" && frac === "");
-  return { negative, int, frac };
-}
-
-function decimalCompare(a: string, b: string): number | null {
-  const left = parseDecimal(a);
-  const right = parseDecimal(b);
-  if (!left || !right) return null;
-  if (left.negative !== right.negative) return left.negative ? -1 : 1;
-  const flip = left.negative ? -1 : 1;
-  if (left.int.length !== right.int.length) return (left.int.length < right.int.length ? -1 : 1) * flip;
-  if (left.int !== right.int) return (left.int < right.int ? -1 : 1) * flip;
-  if (left.frac === right.frac) return 0;
-  return (left.frac < right.frac ? -1 : 1) * flip;
-}
-
-function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>, type: AtlasType): number {
-  if (type === "number" || type === "decimal") {
-    return decimalCompare(String(a), String(b)) ?? byteOrderCompare(String(a), String(b));
-  }
-  return byteOrderCompare(String(a), String(b));
-}
-
-function sortRows(
-  rows: SourceRow[],
-  sort: Array<{ field: string; dir: "asc" | "desc" }>,
-  fieldTypes: ReadonlyMap<string, AtlasType>,
-): void {
-  rows.sort((a, b) => {
-    for (const key of sort) {
-      const left = a[key.field] ?? null;
-      const right = b[key.field] ?? null;
-      if (left === null || right === null) {
-        if (left === null && right === null) continue;
-        return left === null ? 1 : -1;
-      }
-      const order = compareCells(left, right, fieldTypes.get(key.field) ?? "string");
-      if (order !== 0) return key.dir === "desc" ? -order : order;
-    }
-    return 0;
-  });
-}
-
-function neededColumns(req: QueryShape, object: EsbCoreObject): Set<string> {
-  const fields = new Set(req.fields);
-  for (const filter of req.and) fields.add(filter.field);
-  for (const group of req.or ?? []) for (const filter of group) fields.add(filter.field);
-  for (const sort of req.sort ?? []) fields.add(sort.field);
-  if (object.primaryKey) fields.add(object.primaryKey);
-  return fields;
-}
-
-function project(rows: SourceRow[], fields: string[]): SourceRow[] {
-  return rows.map((row) => {
-    const selected: SourceRow = {};
-    for (const field of fields) selected[field] = row[field] ?? null;
-    return selected;
-  });
-}
-
-function omittable(error: unknown): error is EsbCoreError & { status: number } {
-  if (!(error instanceof EsbCoreError) || error.credentialFailure || error.failureKind === "authentication") {
-    return false;
-  }
-  const status = error.status;
-  if (status === undefined) return false;
-  if (error.failureKind === "permission") return true;
-  if (error.applicationFailure || TRANSIENT_STATUSES.has(status) || status >= 500) return false;
-  const incompatible = error.code === "malformed-response" || error.code === "non-progressing-page";
-  return (incompatible && status >= 200 && status < 300) || (status >= 400 && status < 500);
-}
-
-function inaccessibleVerdict(object: EsbCoreObject, error: EsbCoreError & { status: number }): AvailabilityVerdict {
-  const incompatible = error.code === "malformed-response" || error.code === "non-progressing-page";
-  let reason: UnavailabilityReason = "rejected";
-  if (incompatible) reason = "incompatible";
-  else if (error.failureKind === "permission" || error.status === 403) reason = "permission";
-  else if (error.status === 404) reason = "unavailable";
-  return {
-    object,
-    accessible: false,
-    reason,
-    status: error.status,
-    code: error.code,
-  };
-}
-
-function warningFor(verdict: AvailabilityVerdict): string | null {
-  if (verdict.accessible) return null;
-  return verdict.reason === "incompatible"
-    ? `ESB Core ${verdict.object.name} (${verdict.object.path}) was omitted: response format is not supported by Atlas`
-    : `ESB Core ${verdict.object.name} (${verdict.object.path}) was omitted: HTTP ${verdict.status}, code ${verdict.code}`;
-}
-
-async function mapConcurrent<T>(values: T[], concurrency: number, visit: (value: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (next < values.length) {
-      const index = next;
-      next += 1;
-      await visit(values[index] as T);
-    }
-  });
-  await Promise.all(workers);
-}
-
-function discoveredTable(object: EsbCoreObject): DiscoveredTable {
-  const fields: DiscoveredField[] = object.columns.map((column) => ({
-    name: column.name,
-    sourceColumn: column.name,
-    type: column.type,
-    nullable: column.nullable,
-    unique: object.primaryKey === column.name,
-    samples: [],
-    sourceDescription: column.description,
-  }));
-  return {
-    name: object.name,
-    sourceDescription: object.description,
-    storesRows: true,
-    primaryKey: object.primaryKey ? [object.primaryKey] : [],
-    foreignKeys: [],
-    fields,
-  };
-}
 
 export class EsbCoreConnector extends AtlasConnector {
   readonly slug = "esb-core";
@@ -242,11 +79,11 @@ export class EsbCoreConnector extends AtlasConnector {
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
     this.validate(req, object);
-    const fields = [...neededColumns(req, object)];
+    const fields = [...collectNeededColumns(req, object)];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       deadline.check();
       const result = await api.collection(object, page, PAGE_SIZE, deadline, fields);
-      const rows = project(result.rows, fields);
+      const rows = projectRows(result.rows, fields);
       for (let index = 0; index < rows.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
         deadline.check();
         yield rows.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch);
@@ -288,7 +125,7 @@ export class EsbCoreConnector extends AtlasConnector {
       const window = rows.slice(offset, end);
       for (let index = 0; index < window.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
         deadline.check();
-        yield project(window.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
+        yield projectRows(window.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
       }
       return;
     }
@@ -297,7 +134,7 @@ export class EsbCoreConnector extends AtlasConnector {
     for await (const batch of this.scanFiltered(api, req, deadline)) {
       const capped = batch.length > remaining ? batch.slice(0, remaining) : batch;
       remaining -= capped.length;
-      if (capped.length > 0) yield project(capped, req.fields);
+      if (capped.length > 0) yield projectRows(capped, req.fields);
       if (remaining <= 0) return;
     }
   }
@@ -329,8 +166,8 @@ export class EsbCoreConnector extends AtlasConnector {
         await api.collection(object, 1, 1, deadline);
         verdicts.set(object, { object, accessible: true });
       } catch (error) {
-        if (omittable(error)) {
-          verdicts.set(object, inaccessibleVerdict(object, error));
+        if (isOmittableDiscoveryError(error)) {
+          verdicts.set(object, toInaccessibleVerdict(object, error));
           return;
         }
         fatal = error;
@@ -355,11 +192,11 @@ export class EsbCoreConnector extends AtlasConnector {
     const objects = ordered.flatMap((verdict) => (verdict.accessible ? [verdict.object] : []));
     if (objects.length === 0) throw new Error("esb-core: no readable collection endpoints were discovered");
     const warnings = ordered.flatMap((verdict) => {
-      const warning = warningFor(verdict);
+      const warning = discoveryWarning(verdict);
       return warning ? [warning] : [];
     });
     return {
-      tables: objects.map(discoveredTable),
+      tables: objects.map(toDiscoveredTable),
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
