@@ -1,7 +1,7 @@
 import { CONNECTOR_LIMITS } from "../wire/limits";
 import type { StreamLine } from "../wire/schemas";
 import type { SourceRow } from "../wire/vocabulary";
-import { isConnectorError } from "./errors";
+import { ConnectorError } from "./errors";
 
 // never leak a raw driver error onto the wire
 function sanitize(error: unknown): string {
@@ -10,7 +10,7 @@ function sanitize(error: unknown): string {
 
 // a ConnectorError crosses with its own wire code; anything else is an opaque internal
 function errorLine(error: unknown): StreamLine {
-  if (isConnectorError(error)) return { error: error.body().error };
+  if (error instanceof ConnectorError) return { error: error.body().error };
   return { error: { code: "internal", message: sanitize(error) } };
 }
 

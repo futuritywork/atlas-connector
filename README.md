@@ -142,9 +142,9 @@ bearer-guarded POST endpoints (`/check`, `/discovery`, `/query`,
 `credentials` and `timeoutMs`. The wire contract is defined, executably, by the
 Zod schemas in [`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers,
 stream lines) and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the
-capability doc). [`examples/`](examples) holds three complete connectors across
-the SQL and REST paths. Before registering a connector with Atlas, grade it
-with the `atlas-conform` conformance runner.
+capability doc). [`examples/`](examples) holds two complete connectors, one per
+path. Before registering a connector with Atlas, grade it with the
+`atlas-conform` conformance runner.
 
 ## API reference
 
