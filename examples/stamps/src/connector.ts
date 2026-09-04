@@ -2,8 +2,11 @@ import {
   applyFilters,
   assertKnownFields,
   AtlasConnector,
+  ConnectorError,
+  OPS,
   unknownEntity,
   unsupported,
+  type AtlasJson,
   type CheckRequest,
   type CountRequest,
   type DiscoveredField,
@@ -13,13 +16,46 @@ import {
   type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
-import { ATLAS_JSON } from "./capability";
-import {
-  StampsClient,
-  type StampsFetch,
-  type StampsReward,
-  type StampsStore,
-} from "./stamps-api";
+import { z } from "zod";
+import { StampsClient } from "./stamps-api";
+
+const ATLAS_JSON: AtlasJson = {
+  protocolVersion: 1,
+  slug: "stamps",
+  capabilities: {
+    operators: [...OPS],
+    dateBucket: false,
+    sort: "none",
+    offset: false,
+    count: "scan",
+    join: false,
+    enforcesDeclaredKeys: false,
+    probeConcurrency: 2,
+    cheapProbes: false,
+  },
+  credentialSchema: [
+    {
+      key: "merchantToken",
+      label: "Merchant token",
+      type: "password",
+      required: true,
+      placeholder: "40-character merchant token",
+      help: "Stamps CRM → **Settings → API Settings → Merchant → Token**. See the [Stamps API v4 documentation](https://staging-crm2.stamps.id/api/v4/docs).",
+    },
+    {
+      key: "baseUrl",
+      label: "API base URL",
+      type: "text",
+      required: false,
+      placeholder: "https://staging-crm2.stamps.id",
+      help: "Optional Stamps staging host. Leave blank for `https://staging-crm2.stamps.id`; the secondary `https://staging-crm.stamps.id` host is also accepted.",
+    },
+  ],
+  endpoints: [],
+};
+
+const TableName = z.enum(["stores", "rewards"]);
+type TableName = z.infer<typeof TableName>;
 
 type FieldDefinition = Pick<
   DiscoveredField,
@@ -35,9 +71,8 @@ function field(
   return { name, type, nullable, unique };
 }
 
-const TABLES: { name: string; fields: FieldDefinition[] }[] = [
-  {
-    name: "stores",
+const TABLES: Record<TableName, { fields: FieldDefinition[] }> = {
+  stores: {
     fields: [
       field("id", "number", false, true),
       field("name", "string", false),
@@ -58,8 +93,7 @@ const TABLES: { name: string; fields: FieldDefinition[] }[] = [
       field("province", "string", true),
     ],
   },
-  {
-    name: "rewards",
+  rewards: {
     fields: [
       field("id", "number", false, true),
       field("code", "string", true),
@@ -79,98 +113,51 @@ const TABLES: { name: string; fields: FieldDefinition[] }[] = [
       field("terms", "string", false),
     ],
   },
-];
+};
 
-const FIELDS = new Map(TABLES.map((table) => [table.name, table.fields]));
-
-function fieldsOf(table: string): string[] {
-  const fields = FIELDS.get(table);
-  if (!fields) throw unknownEntity(`unknown table "${table}"`);
-  return fields.map((definition) => definition.name);
-}
-
-function storeRow(store: StampsStore): SourceRow {
-  return {
-    id: store.id,
-    name: store.name,
-    code: store.code,
-    area: store.area,
-    display_name: store.display_name,
-    address: store.address,
-    phone: store.phone,
-    email: store.email,
-    slug: store.slug,
-    latitude: store.latitude,
-    longitude: store.longitude,
-    timezone: store.timezone,
-    photo_url: store.photo_url,
-    is_active: store.is_active,
-    description: store.description,
-    regency: store.regency,
-    province: store.province,
-  };
-}
-
-function rewardRow(reward: StampsReward): SourceRow {
-  return {
-    id: reward.id,
-    code: reward.code,
-    name: reward.name,
-    stamps_to_redeem: reward.stamps_to_redeem,
-    user_redemption_limit: reward.user_redemption_limit,
-    picture_url: reward.picture_url,
-    landscape_url: reward.landscape_url,
-    is_active: reward.is_active,
-    start_date: reward.start_date,
-    end_date: reward.end_date,
-    type: String(reward.type),
-    redeemable: reward.redeemable,
-    is_visible: reward.is_visible,
-    merchant_code: reward.merchant_code,
-    description: reward.description,
-    terms: reward.terms,
-  };
+function tableOf(name: string): TableName {
+  const table = TableName.safeParse(name);
+  if (!table.success) throw unknownEntity(`unknown table "${name}"`);
+  return table.data;
 }
 
 function project(row: SourceRow, fields: string[]): SourceRow {
-  return Object.fromEntries(fields.map((name) => [name, row[name] ?? null]));
+  return Object.fromEntries(
+    fields.map((name) => {
+      const value = row[name];
+      if (value === undefined) {
+        throw new ConnectorError(500, `Stamps row is missing declared field "${name}"`);
+      }
+      return [name, value];
+    }),
+  );
 }
 
 export class StampsConnector extends AtlasConnector {
-  readonly slug = "stamps";
-
-  constructor(private readonly fetcher: StampsFetch = fetch) {
-    super();
-  }
+  readonly slug = ATLAS_JSON.slug;
 
   capability() {
     return ATLAS_JSON;
   }
 
   async check(req: CheckRequest): Promise<void> {
-    await new StampsClient(req.credentials, this.fetcher).listStores(req.timeoutMs);
+    await new StampsClient(req.credentials, req.timeoutMs).listStores();
   }
 
   private async *rows(
-    table: string,
+    table: TableName,
     client: StampsClient,
-    timeoutMs: number,
   ): AsyncIterable<SourceRow[]> {
     if (table === "stores") {
-      yield (await client.listStores(timeoutMs)).map(storeRow);
+      yield await client.listStores();
       return;
     }
-    if (table === "rewards") {
-      for await (const rewards of client.listRewards(timeoutMs)) {
-        yield rewards.map(rewardRow);
-      }
-      return;
-    }
-    throw unknownEntity(`unknown table "${table}"`);
+    yield* client.listRewards();
   }
 
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
-    const fields = fieldsOf(req.table);
+    const table = tableOf(req.table);
+    const fields = TABLES[table].fields.map((definition) => definition.name);
     assertKnownFields(req, fields);
     const unknownProjection = req.fields.find((name) => !fields.includes(name));
     if (unknownProjection) {
@@ -179,9 +166,9 @@ export class StampsConnector extends AtlasConnector {
     if (req.sort.length > 0 || (req.offset ?? 0) > 0 || (req.joins?.length ?? 0) > 0) {
       throw unsupported("sorting, offsets, and joins are not supported");
     }
-    const client = new StampsClient(req.credentials, this.fetcher);
+    const client = new StampsClient(req.credentials, req.timeoutMs);
     let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const batch of this.rows(req.table, client, req.timeoutMs)) {
+    for await (const batch of this.rows(table, client)) {
       const filtered = applyFilters(batch, { and: req.and, or: req.or }, req.fieldTypes);
       const limited = filtered.length > remaining ? filtered.slice(0, remaining) : filtered;
       remaining -= limited.length;
@@ -191,33 +178,31 @@ export class StampsConnector extends AtlasConnector {
   }
 
   async count(req: CountRequest): Promise<number> {
-    const fields = fieldsOf(req.table);
+    const table = tableOf(req.table);
+    const fields = TABLES[table].fields.map((definition) => definition.name);
     assertKnownFields(req, fields);
-    const client = new StampsClient(req.credentials, this.fetcher);
+    const client = new StampsClient(req.credentials, req.timeoutMs);
     let count = 0;
-    for await (const batch of this.rows(req.table, client, req.timeoutMs)) {
+    for await (const batch of this.rows(table, client)) {
       count += applyFilters(batch, { and: req.and, or: req.or }, req.fieldTypes).length;
     }
     return count;
   }
 
   async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    const tables: DiscoveredTable[] = TABLES.map((table) => ({
-      name: table.name,
-      sourceDescription: `Stamps API v4 ${table.name}`,
+    const tables: DiscoveredTable[] = TableName.options.map((name) => ({
+      name,
+      sourceDescription: `Stamps API v4 ${name}`,
       storesRows: true,
       primaryKey: ["id"],
       foreignKeys: [],
-      fields: table.fields.map((definition) => ({
+      fields: TABLES[name].fields.map((definition) => ({
         ...definition,
         sourceColumn: definition.name,
         samples: [],
-        sourceDescription: `Stamps API v4 ${table.name}.${definition.name}`,
+        sourceDescription: `Stamps API v4 ${name}.${definition.name}`,
       })),
     }));
     return { tables };
   }
-
-  // profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer
-  // by scanning through query(); override one only where your api can do that math cheaper.
 }

@@ -130,16 +130,4 @@ describe("AtlasConnector base impls", () => {
       }),
     ).toBeUndefined();
   });
-
-  test("derived methods are the base impls until overridden (serve's boot log relies on this)", () => {
-    const connector = new Minimal();
-    expect(connector.aggregate).toBe(AtlasConnector.prototype.aggregate);
-    expect(connector.profileColumns).toBe(AtlasConnector.prototype.profileColumns);
-    class WithAggregate extends Minimal {
-      override async aggregate(): Promise<SourceRow[] | undefined> {
-        return [];
-      }
-    }
-    expect(new WithAggregate().aggregate).not.toBe(AtlasConnector.prototype.aggregate);
-  });
 });

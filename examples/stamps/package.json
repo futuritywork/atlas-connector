@@ -6,12 +6,10 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
-    "check": "tsc --noEmit",
-    "test": "bun test"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@futurity/atlas-connector": "file:../..",
-    "elysia": "^1.4.25",
     "zod": "^4.1.13"
   },
   "devDependencies": {

@@ -8,20 +8,11 @@ import { connectorRoutes } from "./routes";
 const MIN_TOKEN_LENGTH = 32;
 const DEFAULT_PORT = 4100;
 
-// base impls that scan through query()
-const DERIVED = ["profileColumns", "profileLink", "profileGrain", "exactCount", "sampleColumnValues"] as const;
-
 export type ServeOptions = {
   token: string; // bearer; boot-fails under 32 chars
   port?: number; // default 4100
   hostname?: string;
 };
-
-type BaseImplMethod = "aggregate" | (typeof DERIVED)[number];
-
-function isBaseImpl(connector: AtlasConnector, method: BaseImplMethod): boolean {
-  return connector[method] === AtlasConnector.prototype[method];
-}
 
 export function createApp(connector: AtlasConnector, opts: Pick<ServeOptions, "token">): Elysia {
   if (opts.token.length < MIN_TOKEN_LENGTH) {
@@ -30,22 +21,6 @@ export function createApp(connector: AtlasConnector, opts: Pick<ServeOptions, "t
   const doc = AtlasJson.safeParse(connector.capability());
   if (!doc.success) {
     throw new Error(`capability document does not parse: ${z.prettifyError(doc.error)}`);
-  }
-
-  // an advertised aggregate that always 204s wastes round trips; the reverse never gets called
-  const advertised = doc.data.endpoints.includes("aggregate");
-  if (advertised && isBaseImpl(connector, "aggregate")) {
-    console.warn(`[${connector.slug}] endpoints advertises "aggregate" but aggregate() is the base decline`);
-  }
-  if (!advertised && !isBaseImpl(connector, "aggregate")) {
-    console.warn(`[${connector.slug}] aggregate() is implemented but endpoints omits "aggregate"`);
-  }
-
-  const derived = DERIVED.filter((method) => isBaseImpl(connector, method));
-  if (derived.length > 0) {
-    console.log(
-      `[${connector.slug}] ${derived.join(", ")} scan through query(); override them for source-side math`,
-    );
   }
 
   // erase Elysia's per-route generics: callers only handle/listen/stop, never Eden-infer

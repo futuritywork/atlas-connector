@@ -17,6 +17,22 @@ const CODE: Record<ConnectorStatus, string> = {
 const CONNECTOR_ERROR_BRAND = Symbol.for("@futurity/atlas-connector/ConnectorError");
 
 export class ConnectorError extends Error {
+  static override [Symbol.hasInstance](value: unknown): boolean {
+    if (!(value instanceof Error)) return false;
+
+    try {
+      const status = Reflect.get(value, "status");
+      return (
+        Reflect.get(value, CONNECTOR_ERROR_BRAND) === true &&
+        typeof status === "number" &&
+        Object.hasOwn(CODE, status) &&
+        typeof Reflect.get(value, "body") === "function"
+      );
+    } catch {
+      return false;
+    }
+  }
+
   constructor(
     readonly status: ConnectorStatus,
     message: string,
@@ -29,12 +45,6 @@ export class ConnectorError extends Error {
   body(): WireErrorBody {
     return { error: { code: CODE[this.status], message: this.message } };
   }
-}
-
-export function isConnectorError(error: unknown): error is ConnectorError {
-  if (error instanceof ConnectorError) return true;
-  if (typeof error !== "object" || error === null) return false;
-  return (error as Record<symbol, unknown>)[CONNECTOR_ERROR_BRAND] === true;
 }
 
 export const badRequest = (message: string) => new ConnectorError(400, message);

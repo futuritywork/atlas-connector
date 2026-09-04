@@ -37,7 +37,6 @@ platform's protected secret store.
 ```sh
 cp .env.example .env
 bun install
-bun run test
 bun run check
 bun run start
 ```

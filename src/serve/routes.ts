@@ -14,7 +14,7 @@ import {
   ProbeLinkRequest,
   SampleKeyValuesRequest,
 } from "../wire/schemas";
-import { isConnectorError } from "./errors";
+import { ConnectorError } from "./errors";
 import { parseBody, withTimeout } from "./http";
 import { ndjsonStream } from "./stream";
 
@@ -26,7 +26,7 @@ export function connectorRoutes(
     new Elysia()
       // map thrown errors to the wire envelope; sanitized 500 / 400, never a raw stack
       .onError(({ code, error, set, request }) => {
-        if (isConnectorError(error)) {
+        if (error instanceof ConnectorError) {
           set.status = error.status;
           return error.body();
         }
@@ -57,7 +57,7 @@ export function connectorRoutes(
         try {
           await withTimeout(req.timeoutMs, () => connector.check(req));
         } catch (error) {
-          if (isConnectorError(error)) throw error;
+          if (error instanceof ConnectorError) throw error;
           // check_failed's message reaches the tenant verbatim
           set.status = 400;
           return {

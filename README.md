@@ -127,10 +127,10 @@ filter you cannot answer into a 422 (rows that skipped a filter read as rows
 that matched it), and `columnCountsFromValues` / `linkFromValues` /
 `grainFromValues` turn fetched values into probe answers.
 
-A REST connector authors its own `capability.ts`, the honesty contract. Only
-you know which ops your pushdown + `applyFilters` combination honors, and only
-you know which credentials your API needs; every flag is earned, and the
-starter begins narrow.
+A REST connector authors its own capability document alongside the connector;
+the starter keeps it in `capability.ts`. Only you know which operators your
+pushdown and `applyFilters` combination honors, and only you know which
+credentials your API needs; every flag is earned, and the starter begins narrow.
 
 ## The protocol
 
@@ -173,10 +173,8 @@ bounds. `AtlasJson`, `SourceCapabilitiesWire`, `CredentialField`,
 
 **`serve(connector, { token, port?, hostname? })`**: boots the HTTP server;
 returns `{ app, url, stop }`. Boot-fails on a token under 32 chars or an
-invalid capability doc, warns when advertised endpoints and overridden methods
-disagree, and logs which profiling methods still scan through `query()`.
-`createApp(connector, { token })` returns the Elysia app for tests and
-embedding.
+invalid capability doc. `createApp(connector, { token })` returns the Elysia
+app for tests and embedding.
 
 **Errors and http**: `ConnectorError` plus the constructors `badRequest`,
 `unauthorized`, `unknownEntity`, `unsupported`, `timeout`; `parseBody`
