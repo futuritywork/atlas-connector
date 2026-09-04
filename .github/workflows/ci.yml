@@ -85,7 +85,7 @@ jobs:
             -d "$body")
           echo "$answer"
           echo "$answer" | grep -q '"rows":\[{'
-      - name: boot the hosted entrypoint and smoke the lark doc
+      - name: boot the hosted entrypoint and smoke the REST docs
         run: |
           PORT=4101 bun run examples/index.ts &
           for i in $(seq 1 30); do
@@ -95,3 +95,6 @@ jobs:
           doc=$(curl -fsS http://localhost:4101/lark-base/.well-known/futurity/atlas.json)
           echo "$doc"
           echo "$doc" | grep -q '"slug":"lark-base"'
+          stamps_doc=$(curl -fsS http://localhost:4101/stamps/.well-known/futurity/atlas.json)
+          echo "$stamps_doc"
+          echo "$stamps_doc" | grep -q '"slug":"stamps"'
