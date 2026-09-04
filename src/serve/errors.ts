@@ -1,20 +1,36 @@
+import { z } from "zod";
+
 // the wire error envelope: every non-2xx JSON body is exactly { error: { code, message } }
 export type WireErrorBody = { error: { code: string; message: string } };
 
 // 400 malformed body · 401 bad bearer · 404 unknown entity · 422 a legal Atlas request the
 // capability document never advertised · 408 the request's own timeout · 500 anything else
-export type ConnectorStatus = 400 | 401 | 404 | 408 | 422 | 500;
+const ConnectorStatusSchema = z.literal([400, 401, 404, 408, 422, 500]);
+export type ConnectorStatus = z.infer<typeof ConnectorStatusSchema>;
 
-const CODE: Record<ConnectorStatus, string> = {
+const CODE = {
   400: "bad_request",
   401: "unauthorized",
   404: "unknown_entity",
   408: "timeout",
   422: "unsupported",
   500: "internal",
-};
+} satisfies Record<ConnectorStatus, string>;
+
+const ConnectorErrorCause = z.instanceof(Error).pipe(
+  z.object({
+    name: z.literal("ConnectorError"),
+    status: ConnectorStatusSchema,
+    message: z.string(),
+  }),
+);
 
 export class ConnectorError extends Error {
+  static fromCause(cause: unknown): ConnectorError | null {
+    const parsed = ConnectorErrorCause.safeParse(cause);
+    return parsed.success ? new ConnectorError(parsed.data.status, parsed.data.message) : null;
+  }
+
   constructor(
     readonly status: ConnectorStatus,
     message: string,

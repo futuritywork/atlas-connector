@@ -4,14 +4,15 @@ import type { SourceRow } from "../wire/vocabulary";
 import { ConnectorError } from "./errors";
 
 // never leak a raw driver error onto the wire
-function sanitize(error: unknown): string {
-  return error instanceof Error ? (error.message.split("\n")[0] ?? "stream failed") : "stream failed";
+function sanitize(cause: unknown): string {
+  return cause instanceof Error ? (cause.message.split("\n")[0] ?? "stream failed") : "stream failed";
 }
 
 // a ConnectorError crosses with its own wire code; anything else is an opaque internal
-function errorLine(error: unknown): StreamLine {
-  if (error instanceof ConnectorError) return { error: error.body().error };
-  return { error: { code: "internal", message: sanitize(error) } };
+function errorLine(cause: unknown): StreamLine {
+  const connectorError = ConnectorError.fromCause(cause);
+  if (connectorError) return { error: connectorError.body().error };
+  return { error: { code: "internal", message: sanitize(cause) } };
 }
 
 // {end:1} is written only after the producer completes, so a truncated stream is distinguishable
