@@ -220,6 +220,48 @@ describe("ESB Core discovery", () => {
     expect(answer.warnings).toHaveLength(1);
   });
 
+  test("omits every documented permission denial carried in a successful HTTP envelope", async () => {
+    const denials = [
+      ["EC03100003", "access denied. the user does not have permission to view goods receipt data"],
+      ["EC03100003", "access denied. the user does not have permission to view goods transfer request data"],
+      ["EC03100003", "access denied: the user does not have permission to view purchase request data"],
+      [
+        "EC03100003",
+        "access denied: user does not have mapping access to view purchase request from branches: '[ESB Cabang Poris]' (branchID: 3)",
+      ],
+      ["EC03100002", "you did not have access to this resource"],
+      ["EC03100001", "unauthorized to access index Material Delivery"],
+    ] as const;
+
+    for (const [code, message] of denials) {
+      resetEsbCoreTokenCacheForTests();
+      mockFetch(({ url }) => {
+        if (url.pathname.endsWith("/auth/login")) return token();
+        const object = objectForPath(url.pathname)!;
+        if (object === PRODUCTS) return failure(code, 200, message);
+        return object.mode === "direct" ? envelope([]) : page([], "", 1, 1);
+      });
+      const answer = await new EsbCoreConnector().discover({ credentials: CREDENTIALS, timeoutMs: 5_000 });
+      expect(answer.tables).toHaveLength(38);
+      expect(answer.warnings).toHaveLength(1);
+    }
+  });
+
+  test("keeps EC03100003 validation failures fatal", async () => {
+    for (const message of ["Validation Error", 'strconv.ParseInt: parsing "a": invalid syntax']) {
+      resetEsbCoreTokenCacheForTests();
+      mockFetch(({ url }) => {
+        if (url.pathname.endsWith("/auth/login")) return token();
+        const object = objectForPath(url.pathname)!;
+        if (object === PRODUCTS) return failure("EC03100003", 200, message);
+        return object.mode === "direct" ? envelope([]) : page([], "", 1, 1);
+      });
+      await expect(
+        new EsbCoreConnector().discover({ credentials: CREDENTIALS, timeoutMs: 5_000 }),
+      ).rejects.toMatchObject({ code: "EC03100003", applicationFailure: true });
+    }
+  });
+
   test("keeps valid application codes fatal when another envelope field is malformed", async () => {
     mockFetch(({ url }) => {
       if (url.pathname.endsWith("/auth/login")) return token();

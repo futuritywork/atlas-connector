@@ -40,6 +40,8 @@ export type TokenEntry = {
 const tokenEntries = new Map<string, TokenEntry>();
 const ESB_APPLICATION_CODE = /^EC\d{8}$/;
 const HTTP_CODE = /^\d{3}$/;
+// developers.esb.co.id/esb-core documents six permission phrasings; the codes alone also represent validation errors.
+const COLLECTION_PERMISSION_DENIAL_MESSAGE = /^access denied[.:]?\s|^unauthorized to access |did not have access to this resource/;
 const INTERNAL_CODES = new Set([
   "invalid-token-response",
   "malformed-envelope",
@@ -71,7 +73,9 @@ export function isCollectionPermissionDenied(response: WireResponse): boolean {
   if (message === "invalid token" || message === "unauthorized") return false;
   const code = getFailureCode(response.envelope);
   return (
-    (code === "EC03100001" && message?.startsWith("unauthorized to access ") === true) ||
+    ((code === "EC03100001" || code === "EC03100002" || code === "EC03100003") &&
+      message !== null &&
+      COLLECTION_PERMISSION_DENIAL_MESSAGE.test(message)) ||
     (response.status === 403 && (code === null || code === "EC03100001"))
   );
 }
