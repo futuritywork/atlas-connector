@@ -56,9 +56,13 @@ export class EsbCoreConnector extends AtlasConnector {
     return object;
   }
 
-  private validate(req: QueryShape, object: EsbCoreObject): ReadonlyMap<string, AtlasType> {
+  private fieldTypes(object: EsbCoreObject): ReadonlyMap<string, AtlasType> {
+    return new Map(object.columns.map((column) => [column.name, column.type]));
+  }
+
+  private validate(req: QueryShape, object: EsbCoreObject): void {
     if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
-    const fieldTypes = new Map(object.columns.map((column) => [column.name, column.type]));
+    const fieldTypes = this.fieldTypes(object);
     assertKnownFields(req, fieldTypes.keys());
     for (const field of req.fields) {
       if (!fieldTypes.has(field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
@@ -66,10 +70,6 @@ export class EsbCoreConnector extends AtlasConnector {
     for (const sort of req.sort ?? []) {
       if (!fieldTypes.has(sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
     }
-    if (object.primaryKey && !fieldTypes.has(object.primaryKey)) {
-      throw new Error(`esb-core: declared primary key ${object.name}.${object.primaryKey} is not a catalog field`);
-    }
-    return fieldTypes;
   }
 
   private async *scan(
@@ -99,7 +99,7 @@ export class EsbCoreConnector extends AtlasConnector {
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    const fieldTypes = Object.fromEntries(object.columns.map((column) => [column.name, column.type]));
+    const fieldTypes = Object.fromEntries(this.fieldTypes(object));
     const parsedFilters = EsbFilterSet(fieldTypes).safeParse({ and: req.and, or: req.or });
     if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
     for await (const batch of this.scan(api, req, deadline)) {
@@ -119,7 +119,7 @@ export class EsbCoreConnector extends AtlasConnector {
       for await (const batch of this.scanFiltered(api, req, deadline)) rows.push(...batch);
       deadline.check();
       const object = this.objectFor(req.table);
-      const fieldTypes = new Map(object.columns.map((column) => [column.name, column.type]));
+      const fieldTypes = this.fieldTypes(object);
       sortRows(rows, req.sort, fieldTypes);
       const end = req.limit === undefined ? undefined : offset + req.limit;
       const window = rows.slice(offset, end);

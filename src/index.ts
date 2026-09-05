@@ -23,7 +23,7 @@ export { bearerGuard } from "./serve/auth";
 export { ndjsonStream } from "./serve/stream";
 
 // the kit a rest/erp author reaches for when they don't extend SqlConnector
-export { applyFilters } from "./kit/apply-filters";
+export { applyFilters, byteOrderCompare, decimalCompare } from "./kit/apply-filters";
 export { assertKnownFields } from "./kit/assert-known-fields";
 export {
   columnCountsFromValues,

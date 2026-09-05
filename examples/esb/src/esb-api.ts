@@ -142,7 +142,8 @@ export class EsbCoreApi {
     requestToken?: TokenState,
   ): TokenState {
     const code = getFailureCode(response.envelope);
-    const tokenFailure = (applicationFailure: boolean): EsbCoreError => {
+    const applicationFailure = isSuccessfulStatus(response.status);
+    const tokenFailure = (): EsbCoreError => {
       const credentialFailure =
         response.status === 401 ||
         response.status === 403 ||
@@ -154,11 +155,11 @@ export class EsbCoreApi {
         { credentialFailure, status: response.status, applicationFailure, requestToken },
       );
     };
-    if (!isSuccessfulStatus(response.status)) throw tokenFailure(false);
+    if (!applicationFailure) throw tokenFailure();
 
     const success = EsbSuccessEnvelope.safeParse(response.envelope);
     if (!success.success) {
-      if (code !== null) throw tokenFailure(true);
+      if (code !== null) throw tokenFailure();
       throw this.error("malformed-envelope", "token response envelope was malformed", {
         status: response.status,
         requestToken,
@@ -335,14 +336,17 @@ export class EsbCoreApi {
     }
 
     const result = success.data.result;
-    if (object.mode === "direct") {
-      const parsed = EsbCollectionRows(object, fields).safeParse(result);
+    const parseRows = (data: unknown): SourceRow[] => {
+      const parsed = EsbCollectionRows(object, fields).safeParse(data);
       if (!parsed.success) {
         throw this.error("malformed-response", describeCollection(object, describeMalformedRows(object, parsed.error.issues)), {
           status: response.status,
         });
       }
-      return { rows: parsed.data, hasNext: false };
+      return parsed.data;
+    };
+    if (object.mode === "direct") {
+      return { rows: parseRows(result), hasNext: false };
     }
 
     const returnedPage = EsbPagedCollectionPage.safeParse(result);
@@ -358,14 +362,8 @@ export class EsbCoreApi {
       });
     }
 
-    const parsed = EsbCollectionRows(object, fields).safeParse(header.data.data);
-    if (!parsed.success) {
-      throw this.error("malformed-response", describeCollection(object, describeMalformedRows(object, parsed.error.issues)), {
-        status: response.status,
-      });
-    }
     return {
-      rows: parsed.data,
+      rows: parseRows(header.data.data),
       page: header.data.page,
       limit: header.data.limit,
       hasNext: (header.data.next ?? "").length > 0,
