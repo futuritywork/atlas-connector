@@ -106,6 +106,34 @@ describe("ESB value schemas", () => {
       goodsDeliveryNum: null,
     });
   });
+
+  test("normalizes every flagActive field from numeric and boolean inputs", () => {
+    const objects = ESB_CORE_CATALOG.filter((object) => object.columns.some((column) => column.name === "flagActive"));
+    expect(objects.map((object) => object.name)).toEqual([
+      "purposes",
+      "bills_of_material",
+      "categories",
+      "cost_centers",
+      "customers",
+      "document_templates",
+      "products",
+      "subcategories",
+      "supplier_categories",
+      "suppliers",
+    ]);
+
+    for (const object of objects) {
+      const schema = EsbRow(object, ["flagActive"]);
+      for (const value of [1, true]) {
+        const parsed = schema.safeParse({ flagActive: value });
+        expect(parsed.success).toBe(true);
+        if (parsed.success) {
+          expect(parsed.data.flagActive).toBe(true);
+          expect(typeof parsed.data.flagActive).toBe("boolean");
+        }
+      }
+    }
+  });
 });
 
 describe("ESB filter schemas", () => {

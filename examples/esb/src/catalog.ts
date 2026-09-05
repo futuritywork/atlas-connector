@@ -859,7 +859,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Bill of Material - 1: Active - 0: Not Active",
       },
@@ -904,7 +904,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Category - 1: Active - 0: Not Active",
       },
@@ -1180,7 +1180,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Bill of Material - 1: Active - 0: Not Active",
       },
@@ -1312,7 +1312,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Bill of Material - 1: Active - 0: Not Active",
       },
@@ -1346,7 +1346,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Category - 1: Active - 0: Not Active",
       },
@@ -1373,7 +1373,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
       },
       {
         name: "flagActive",
-        type: "number",
+        type: "boolean",
         nullable: true,
         description: "Flag setting for Active or not Supplier Category: 1 Active, 0 Not Active",
       },
