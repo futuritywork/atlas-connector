@@ -107,6 +107,13 @@ describe("ESB value schemas", () => {
     });
   });
 
+  test("an empty projection has no catalog field to require, so count() rows still parse", () => {
+    // count() on an entity with no primary key and no filters needs no columns at all;
+    // requiring a field there would reject every row of a perfectly valid response.
+    expect(EsbRow(GOODS_DELIVERIES, []).parse({ goodsDeliveryNum: "GD1" })).toEqual({});
+    expect(EsbRow(GOODS_DELIVERIES, []).parse({})).toEqual({});
+  });
+
   test("normalizes every flagActive field from numeric and boolean inputs", () => {
     const objects = ESB_CORE_CATALOG.filter((object) => object.columns.some((column) => column.name === "flagActive"));
     expect(objects.map((object) => object.name)).toEqual([

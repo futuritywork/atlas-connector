@@ -133,13 +133,16 @@ export function EsbRow(object: EsbCoreObject, fields?: readonly string[]): z.Zod
     const value = rowValue(column.type);
     shape[column.name] = column.nullable ? value.nullable().optional() : value;
   }
-  const schema = z
-    .object(shape)
-    .strip()
-    .pipe(z.record(z.string(), AtlasValue))
-    .refine((row) => Object.keys(row).length > 0, {
-      message: `ESB Core ${object.name} row did not contain a catalog field`,
-    });
+  const projection = z.object(shape).strip().pipe(z.record(z.string(), AtlasValue));
+  // A row contributing no catalog field is not a row of this entity: without this, an all-nullable
+  // object like goods_deliveries accepts arbitrary JSON as {}. count() projects to nothing on
+  // purpose, though, so an empty selection has no field to require.
+  const schema =
+    Object.keys(shape).length === 0
+      ? projection
+      : projection.refine((row) => Object.keys(row).length > 0, {
+          message: `ESB Core ${object.name} row did not contain a catalog field`,
+        });
   cacheRow(object, fields, schema);
   return schema;
 }

@@ -628,6 +628,21 @@ describe("ESB Core query and count", () => {
     expect(count).toBe(2);
   });
 
+  test("counts an unfiltered entity that has no primary key", async () => {
+    // goods_deliveries declares no primaryKey, so an unfiltered count needs no columns and
+    // every row projects to {}. The row schema must not demand a catalog field here.
+    const rows = [{ goodsDeliveryNum: "GD1" }, { goodsDeliveryNum: "GD2" }, { goodsDeliveryNum: "GD3" }];
+    expect(GOODS_DELIVERIES.primaryKey).toBeUndefined();
+    mockObjectRows(GOODS_DELIVERIES, { 1: { rows } });
+    const count = await new EsbCoreConnector().count({
+      table: GOODS_DELIVERIES.name,
+      and: [],
+      credentials: CREDENTIALS,
+      timeoutMs: 1_000,
+    });
+    expect(count).toBe(3);
+  });
+
   test("refuses to truncate a page walk beyond the hard maximum", async () => {
     let resources = 0;
     mockFetch(({ url }) => {
