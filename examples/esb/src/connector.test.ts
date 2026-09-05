@@ -21,6 +21,7 @@ const ITEM_JOURNALS = ESB_CORE_CATALOG.find((object) => object.name === "item_jo
 const PRICELISTS = ESB_CORE_CATALOG.find((object) => object.name === "pricelists")!;
 const RECEIPTS = ESB_CORE_CATALOG.find((object) => object.name === "receipts")!;
 const CUSTOMERS = ESB_CORE_CATALOG.find((object) => object.name === "customers")!;
+const GOODS_DELIVERIES = ESB_CORE_CATALOG.find((object) => object.name === "goods_deliveries")!;
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -189,6 +190,22 @@ describe("ESB Core discovery", () => {
     expect(answer.tables.some((table) => table.name === PRODUCTS.name)).toBe(false);
     expect(answer.warnings).toEqual([
       `ESB Core products (${PRODUCTS.path}) was omitted: response format is not supported by Atlas`,
+    ]);
+  });
+
+  test("omits an all-nullable entity whose response contains no catalog fields", async () => {
+    mockFetch(({ url }) => {
+      if (url.pathname.endsWith("/auth/login")) return token();
+      const object = objectForPath(url.pathname)!;
+      if (object === GOODS_DELIVERIES) return page([{ unexpected: { junk: true } }], "", 1, 1);
+      return object.mode === "direct" ? envelope([]) : page([], "", 1, 1);
+    });
+
+    const answer = await new EsbCoreConnector().discover({ credentials: CREDENTIALS, timeoutMs: 5_000 });
+    expect(answer.tables).toHaveLength(38);
+    expect(answer.tables.some((table) => table.name === GOODS_DELIVERIES.name)).toBe(false);
+    expect(answer.warnings).toEqual([
+      `ESB Core goods_deliveries (${GOODS_DELIVERIES.path}) was omitted: response format is not supported by Atlas`,
     ]);
   });
 

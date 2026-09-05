@@ -133,7 +133,13 @@ export function EsbRow(object: EsbCoreObject, fields?: readonly string[]): z.Zod
     const value = rowValue(column.type);
     shape[column.name] = column.nullable ? value.nullable().optional() : value;
   }
-  const schema = z.object(shape).strip().pipe(z.record(z.string(), AtlasValue));
+  const schema = z
+    .object(shape)
+    .strip()
+    .pipe(z.record(z.string(), AtlasValue))
+    .refine((row) => Object.keys(row).length > 0, {
+      message: `ESB Core ${object.name} row did not contain a catalog field`,
+    });
   cacheRow(object, fields, schema);
   return schema;
 }

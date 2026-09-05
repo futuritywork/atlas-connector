@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ESB_CORE_CATALOG } from "./catalog";
 import type { EsbCoreObject } from "./types";
 import {
   EsbDateValue,
@@ -30,6 +31,7 @@ const TYPED_OBJECT: EsbCoreObject = {
     { name: "enabled", type: "boolean", nullable: true, description: "Enabled" },
   ],
 };
+const GOODS_DELIVERIES = ESB_CORE_CATALOG.find((object) => object.name === "goods_deliveries")!;
 
 describe("ESB value schemas", () => {
   test("canonicalizes zoned datetimes and preserves valid zone-less datetimes", () => {
@@ -88,6 +90,21 @@ describe("ESB value schemas", () => {
     ]) {
       expect(EsbRow(TYPED_OBJECT).safeParse(row).success).toBe(false);
     }
+  });
+
+  test("requires all-nullable rows to contain a selected catalog field", () => {
+    const schema = EsbRow(GOODS_DELIVERIES);
+    for (const row of [{ unexpected: { junk: true } }, {}]) {
+      const parsed = schema.safeParse(row);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) expect(parsed.error.issues[0]?.message).toContain("goods_deliveries");
+    }
+
+    expect(schema.parse({ goodsDeliveryNum: null })).toEqual({ goodsDeliveryNum: null });
+    expect(EsbRow(GOODS_DELIVERIES, ["goodsDeliveryNum"]).safeParse({ statusName: "Complete" }).success).toBe(false);
+    expect(EsbRow(GOODS_DELIVERIES, ["goodsDeliveryNum"]).parse({ goodsDeliveryNum: null })).toEqual({
+      goodsDeliveryNum: null,
+    });
   });
 });
 
