@@ -44,7 +44,7 @@ export const EsbPagedCollectionPage = z.looseObject({ page: z.number().int() });
 export const EsbPagedCollectionHeader = EsbPagedCollectionPage.extend({
   limit: z.number().int().min(1),
   data: z.array(z.unknown()),
-  next: z.string(),
+  next: z.string().optional(),
 }).refine((page) => page.data.length <= page.limit, { path: ["limit"] });
 
 export const EsbTokenResult = z.looseObject({

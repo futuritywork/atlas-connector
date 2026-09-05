@@ -442,6 +442,17 @@ describe("ESB Core query and count", () => {
     expect(pagedCalls.at(-1)?.url.searchParams.get("page")).toBe("2");
   });
 
+  test("terminates a paged response when next is omitted", async () => {
+    const calls = mockFetch(({ url }) => {
+      if (url.pathname.endsWith("/auth/login")) return token();
+      expect(url.pathname).toBe(`/core${PRODUCTS.path}`);
+      return envelope({ page: 1, limit: 100, data: [{ productID: 1, productName: "First" }] });
+    });
+
+    expect(await collect(query())).toEqual([{ productID: 1, productName: "First" }]);
+    expect(calls.filter((call) => call.url.pathname === `/core${PRODUCTS.path}`)).toHaveLength(1);
+  });
+
   test("preserves and filters catalog date values as YYYY-MM-DD", async () => {
     mockObjectRows(PRICELISTS, {
       1: {

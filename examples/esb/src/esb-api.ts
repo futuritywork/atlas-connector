@@ -368,7 +368,7 @@ export class EsbCoreApi {
       rows: parsed.data,
       page: header.data.page,
       limit: header.data.limit,
-      hasNext: header.data.next.length > 0,
+      hasNext: (header.data.next ?? "").length > 0,
     };
   }
 }
