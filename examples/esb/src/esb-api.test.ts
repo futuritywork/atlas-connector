@@ -355,6 +355,7 @@ describe("ESB Core response validation and safe failures", () => {
       resetEsbCoreTokenCacheForTests();
       mockFetch(response);
       const error = await new EsbCoreApi(CREDENTIALS).authenticate(makeDeadline(100)).catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(Error);
       expect(String(error)).not.toContain(CREDENTIALS.password);
     }
   });

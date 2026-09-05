@@ -372,14 +372,27 @@ describe("ESB Core query and count", () => {
   });
 
   test("rejects unknown tables, requested/filter/sort fields, and joins", async () => {
-    const invalid = [
-      query({ table: "missing" }),
-      query({ fields: ["missing"] }),
-      query({ and: [{ field: "missing", op: "eq", value: 1 }] }),
-      query({ sort: [{ field: "missing", dir: "asc" }] }),
-      query({ joins: [{ fromTable: "products", toTable: "products", fromField: "productID", toField: "productID", fields: [] }] }),
+    const invalid: Array<[NativeQueryRequest, number]> = [
+      [query({ table: "missing" }), 404],
+      [query({ fields: ["missing"] }), 422],
+      [query({ and: [{ field: "missing", op: "eq", value: 1 }] }), 422],
+      [query({ sort: [{ field: "missing", dir: "asc" }] }), 422],
+      [
+        query({
+          joins: [
+            {
+              fromTable: "products",
+              toTable: "products",
+              fromField: "productID",
+              toField: "productID",
+              fields: [],
+            },
+          ],
+        }),
+        422,
+      ],
     ];
-    for (const request of invalid) await expect(collect(request)).rejects.toMatchObject({ status: expect.any(Number) });
+    for (const [request, status] of invalid) await expect(collect(request)).rejects.toMatchObject({ status });
   });
 
   test("rejects filter values that contradict catalog field types", async () => {
@@ -443,6 +456,21 @@ describe("ESB Core query and count", () => {
       }),
     );
     expect(rows.map((row) => row.advancePaymentNum)).toEqual(["b", "a", "d"]);
+  });
+
+  test("applies offset and limit without a sort", async () => {
+    mockObjectRows(PRODUCTS, {
+      1: {
+        rows: [
+          { productID: 1, productName: "One" },
+          { productID: 2, productName: "Two" },
+          { productID: 3, productName: "Three" },
+          { productID: 4, productName: "Four" },
+        ],
+      },
+    });
+
+    expect(await collect(query({ offset: 2, limit: 1 }))).toEqual([{ productID: 3, productName: "Three" }]);
   });
 
   test("reads direct endpoints once and follows next across empty paged responses", async () => {
