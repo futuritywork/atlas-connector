@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { AtlasJson, CheckAnswer, QueryAnswer } from "../src/index";
+import { AtlasJson, CheckAnswer, QueryAnswer, type CheckRequest, type NativeQueryRequest } from "../src/index";
 
 const token = z.string().min(32).parse(process.env.ATLAS_CONNECTOR_TOKEN);
 const databaseUrl = z.string().min(1).parse(process.env.CONNECTOR_DATABASE_URL);
@@ -11,7 +11,7 @@ async function get(url: string): Promise<Response> {
   return response;
 }
 
-async function post(url: string, body: unknown): Promise<Response> {
+async function post(url: string, body: CheckRequest | NativeQueryRequest): Promise<Response> {
   return fetch(url, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -20,34 +20,28 @@ async function post(url: string, body: unknown): Promise<Response> {
   });
 }
 
-async function smoke(entry: string, port: number, readyPath: string, verify: (base: string) => Promise<void>) {
-  const server = Bun.spawn([process.execPath, "run", entry], {
-    env: { ...process.env, PORT: String(port), CONNECTOR_PORT: String(port) },
+async function smoke(entry: string, verify: (base: string) => Promise<void>) {
+  const ready = Promise.withResolvers<unknown>();
+  const server = Bun.spawn([process.execPath, entry], {
+    env: { ...process.env, PORT: "0", CONNECTOR_PORT: "0" },
     stdout: "inherit",
     stderr: "inherit",
+    timeout: 30_000,
+    killSignal: "SIGKILL",
+    ipc: ready.resolve,
+    onExit: (_server, code) => ready.reject(new Error(`${entry} exited before readiness (${code})`)),
   });
-  const base = `http://localhost:${port}`;
   try {
-    const deadline = Date.now() + 30_000;
-    for (;;) {
-      assert(server.exitCode === null, `${entry} exited before readiness`);
-      try {
-        await get(`${base}${readyPath}`);
-        break;
-      } catch (cause) {
-        if (Date.now() >= deadline) throw cause;
-        await Bun.sleep(250);
-      }
-    }
+    const base = z.url().parse(await ready.promise);
     await verify(base);
     console.log(`smoke passed: ${entry}`);
   } finally {
-    server.kill();
+    server.kill("SIGKILL");
     await server.exited;
   }
 }
 
-await smoke("examples/brightline-crm/src/index.ts", 4100, "/.well-known/futurity/atlas.json", async (base) => {
+await smoke("examples/brightline-crm/src/index.ts", async (base) => {
   const doc = AtlasJson.parse(await (await get(`${base}/.well-known/futurity/atlas.json`)).json());
   assert.equal(doc.slug, "brightline");
   assert(doc.credentialSchema.some((field) => field.key === "databaseUrl"));
@@ -62,7 +56,7 @@ await smoke("examples/brightline-crm/src/index.ts", 4100, "/.well-known/futurity
   assert.equal(QueryAnswer.parse(await query.json()).rows.length, 1);
 });
 
-await smoke("examples/index.ts", 4101, "/", async (base) => {
+await smoke("examples/index.ts", async (base) => {
   const manifest = z.object({ connectors: z.array(z.string().regex(/^\/[a-z0-9-]+$/)).min(1) })
     .parse(await (await get(base)).json());
   for (const prefix of manifest.connectors) {

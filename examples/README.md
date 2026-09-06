@@ -40,7 +40,8 @@ see the root README and the futurity docs for the design walkthrough.
 CI runs `bun run scripts/smoke-examples.ts` after seeding Brightline. The script
 checks the SQL example and discovers hosted connectors from the root manifest,
 so registering a connector in `examples/index.ts` includes it in the smoke check.
-It requires `ATLAS_CONNECTOR_TOKEN` and the seeded `CONNECTOR_DATABASE_URL`,
-uses local ports 4100/4101, and stops the servers when finished.
+It requires `ATLAS_CONNECTOR_TOKEN` and the seeded `CONNECTOR_DATABASE_URL`.
+Entrypoints report their OS-assigned listening URL over Bun IPC; the script
+bounds each subprocess to 30 seconds and stops it when finished.
 
 `bun run start` at the repo root runs `examples/index.ts`: one process, each connector mounted at `/<slug>` on one origin, one `ATLAS_CONNECTOR_TOKEN` for the host. a source registers with the prefix as its base url, e.g. `https://<host>/lark-base`, `https://<host>/esb-core`, or `https://<host>/stamps`; the capability doc is at `<base>/.well-known/futurity/atlas.json`. lark, esb-core, and stamps are in it: brightline opens a pool to whatever `databaseUrl` a caller sends, so it stays off any public host. esb-core is process-local by design, so run the demo host as a single replica.

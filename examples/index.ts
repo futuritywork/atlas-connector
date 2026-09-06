@@ -18,5 +18,7 @@ for (const connector of CONNECTORS) {
   app.group(`/${connector.slug}`, (group) => group.use(createApp(connector, { token })));
 }
 
-app.listen({ port });
-console.log(`connectors at http://localhost:${port}: ${prefixes.join(" ")}`);
+app.listen({ port }, (server) => {
+  process.send?.(server.url.origin);
+  console.log(`connectors at ${server.url}: ${prefixes.join(" ")}`);
+});
