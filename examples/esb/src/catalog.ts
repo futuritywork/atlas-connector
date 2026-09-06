@@ -726,23 +726,8 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
   },
 ];
 
-export function validateEsbCoreCatalog(catalog: EsbCoreObject[] = ESB_CORE_CATALOG): void {
-  const names = new Set<string>();
-  for (const object of catalog) {
-    if (names.has(object.name)) throw new Error(`duplicate ESB Core table '${object.name}'`);
-    names.add(object.name);
-
-    const fields = new Set<string>();
-    for (const column of object.columns) {
-      if (fields.has(column.name)) {
-        throw new Error(`duplicate ESB Core field '${object.name}.${column.name}'`);
-      }
-      fields.add(column.name);
-    }
-    if (object.primaryKey && !fields.has(object.primaryKey)) {
-      throw new Error(`ESB Core primary key '${object.name}.${object.primaryKey}' is not a declared field`);
-    }
+for (const object of ESB_CORE_CATALOG) {
+  if (object.primaryKey && !object.columns.some((column) => column.name === object.primaryKey)) {
+    throw new Error(`ESB Core primary key '${object.name}.${object.primaryKey}' is not a declared field`);
   }
 }
-
-validateEsbCoreCatalog();

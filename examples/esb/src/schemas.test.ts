@@ -3,7 +3,6 @@ import { field } from "@futurity/atlas-connector";
 import { ESB_CORE_CATALOG } from "./catalog";
 import type { EsbCoreObject } from "./types";
 import {
-  EsbDateValue,
   EsbDatetimeValue,
   EsbFilterSet,
   EsbRow,
@@ -53,13 +52,6 @@ describe("ESB value schemas", () => {
     ]) {
       expect(EsbDatetimeValue.safeParse(value).success).toBe(false);
     }
-  });
-
-  test("accepts only canonical date text or null", () => {
-    expect(EsbDateValue.parse("2024-01-01")).toBe("2024-01-01");
-    expect(EsbDateValue.parse(null)).toBeNull();
-    expect(EsbDateValue.safeParse("2024-02-30").success).toBe(false);
-    expect(EsbDateValue.safeParse("2024-01-01T00:00:00Z").success).toBe(false);
   });
 
   test("builds catalog-derived row schemas that normalize and enforce field types", () => {

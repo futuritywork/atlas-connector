@@ -3,19 +3,13 @@ import {
   decimalCompare,
   type AtlasType,
   type AtlasValue,
-  type Filter,
+  type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
 import type { EsbCoreObject } from "../types";
 
-export type QueryShape = {
-  table: string;
-  and: Filter[];
-  or?: Filter[][];
-  fields: string[];
-  sort?: Array<{ field: string; dir: "asc" | "desc" }>;
-  joins?: unknown[];
-};
+export type QueryShape = Pick<NativeQueryRequest, "table" | "and" | "or" | "fields"> &
+  Partial<Pick<NativeQueryRequest, "sort" | "joins">>;
 
 function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>, type: AtlasType): number {
   if (type === "number" || type === "decimal") {
@@ -26,7 +20,7 @@ function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>
 
 export function sortRows(
   rows: SourceRow[],
-  sort: Array<{ field: string; dir: "asc" | "desc" }>,
+  sort: NativeQueryRequest["sort"],
   fieldTypes: Readonly<Record<string, AtlasType>>,
 ): void {
   rows.sort((a, b) => {

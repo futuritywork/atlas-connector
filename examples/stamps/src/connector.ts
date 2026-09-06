@@ -147,10 +147,6 @@ export class StampsConnector extends AtlasConnector {
     const table = tableOf(req.table);
     const types = fieldTypes(table.columns);
     assertKnownFields(req, Object.keys(types));
-    const unknownProjection = req.fields.find((name) => !catalog.getColumn(table, name));
-    if (unknownProjection) {
-      throw unsupported(`unknown projection field '${unknownProjection}'`);
-    }
     if (req.sort.length > 0 || (req.offset ?? 0) > 0 || (req.joins?.length ?? 0) > 0) {
       throw unsupported("sorting, offsets, and joins are not supported");
     }

@@ -32,10 +32,9 @@ correct. Override one only to make it cheaper: a source-side `COUNT DISTINCT`,
 a total your API returns on a page. `aggregate()` declines with a 204 until you
 implement it and add `"aggregate"` to `endpoints`.
 
-The one rule with no default: a filter on a field you cannot answer must throw
-`unsupported` (422). `assertKnownFields(req, fields)` from the kit does it, and
-the template calls it in `query` and `count`. Rows that skipped a filter come
-back looking like rows that matched it.
+Unknown filter, projection, or sort fields must throw `unsupported` (422).
+`assertKnownFields(req, fields)` from the kit enforces this in `query` and
+`count`. Rows that skipped a filter look like rows that matched it.
 
 ## The honesty contract (`src/capability.ts`)
 

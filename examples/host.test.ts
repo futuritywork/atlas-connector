@@ -127,7 +127,7 @@ describe("ESB in the shared host", () => {
 });
 
 test("Lark discovery owns filtering, numeric sorting, projection, and count in the shared host", async () => {
-  globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
+  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(input instanceof Request ? input.url : input).pathname;
     if (path.endsWith("/tenant_access_token/internal")) {
       return Response.json({ code: 0, tenant_access_token: "host-lark-token", expire: 7200 });
@@ -137,11 +137,15 @@ test("Lark discovery owns filtering, numeric sorting, projection, and count in t
     }
     if (path.endsWith("/fields")) {
       return Response.json({ code: 0, data: { items: [
+        { field_name: "record_id", type: 1, ui_type: "Text" },
         { field_name: "code", type: 1, ui_type: "Text" },
         { field_name: "amount", type: 2, ui_type: "Number" },
       ], has_more: false } });
     }
     if (path.endsWith("/records/search")) {
+      expect(await new Request(input, init).json()).not.toMatchObject({
+        filter: { conditions: expect.arrayContaining([expect.objectContaining({ field_name: "record_id" })]) },
+      });
       return Response.json({ code: 0, data: { items: [
         { record_id: "low", fields: { code: "01", amount: 2e-8 } },
         { record_id: "high", fields: { code: "01", amount: 1e-7 } },
@@ -159,7 +163,9 @@ test("Lark discovery owns filtering, numeric sorting, projection, and count in t
   };
   const discovery = await post("/discovery", connection, TOKEN, "lark-base");
   expect(discovery.status).toBe(200);
-  expect((await discovery.json()).tables[0]).toMatchObject({
+  const discovered = await discovery.json();
+  expect(discovered.warnings).toHaveLength(1);
+  expect(discovered.tables[0]).toMatchObject({
     name: "deals",
     primaryKey: ["record_id"],
     fields: [
@@ -189,6 +195,14 @@ test("Lark discovery owns filtering, numeric sorting, projection, and count in t
   const count = await post("/count", selection, TOKEN, "lark-base");
   expect(count.status).toBe(200);
   expect(await count.json()).toEqual({ count: 4 });
+  const identity = await post("/query", {
+    ...selection,
+    and: [{ field: "record_id", op: "eq", value: "high" }],
+    fields: ["record_id"],
+    sort: [],
+  }, TOKEN, "lark-base");
+  expect(identity.status).toBe(200);
+  expect(await identity.json()).toEqual({ rows: [{ record_id: "high" }] });
   for (const value of [1e-7, "0.0000001"]) {
     const numeric = await post("/count", {
       ...selection,
@@ -196,5 +210,14 @@ test("Lark discovery owns filtering, numeric sorting, projection, and count in t
     }, TOKEN, "lark-base");
     expect(numeric.status).toBe(200);
     expect(await numeric.json()).toEqual({ count: 1 });
+  }
+  for (const invalid of [
+    { fields: ["missing"], sort: [] },
+    { fields: [], sort: [{ field: "missing", dir: "asc" }] },
+    { fields: [], sort: [], or: [[{ field: "missing", op: "isnull" }]] },
+  ]) {
+    const rejected = await post("/query", { ...selection, ...invalid }, TOKEN, "lark-base");
+    expect(rejected.status).toBe(422);
+    expect((await rejected.json()).error.code).toBe("unsupported");
   }
 });

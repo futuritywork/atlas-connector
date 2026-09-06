@@ -27,10 +27,17 @@ export type Catalog<T extends CatalogTable = CatalogTable> = {
 };
 
 export function defineCatalog<T extends CatalogTable>(tables: T[]): Catalog<T> {
-  const byName = new Map(tables.map((table) => [table.name, table]));
+  if (new Set(tables.map((table) => table.name)).size !== tables.length) {
+    throw new Error("duplicate catalog table name");
+  }
+  for (const table of tables) {
+    if (new Set(table.columns.map((column) => column.name)).size !== table.columns.length) {
+      throw new Error(`duplicate catalog field name on '${table.name}'`);
+    }
+  }
   return {
     tables,
-    getTable: (name) => byName.get(name),
+    getTable: (name) => tables.find((table) => table.name === name),
     getColumn: (table, name) => table.columns.find((column) => column.name === name),
   };
 }

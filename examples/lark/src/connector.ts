@@ -186,15 +186,21 @@ export class LarkConnector extends AtlasConnector {
   // #region row production
 
   // pushes the pushable slice of and[]; rows carry exactly the needed columns
-  private async *scan(client: LarkClient, req: QueryShape, deadline: Deadline): AsyncIterable<SourceRow[]> {
+  private async *scan(
+    client: LarkClient,
+    req: QueryShape,
+    deadline: Deadline,
+    tableId: string,
+    sourceFields: Map<string, LarkField>,
+  ): AsyncIterable<SourceRow[]> {
     if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; atlas joins locally");
-    const { meta, table } = await this.resolveTable(client, req.table, deadline);
-    const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
+    const fieldsByName = new Map(sourceFields);
+    fieldsByName.delete(RECORD_ID);
     const types = fieldTypes(catalogFields(fieldsByName));
     assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
     const columns = neededColumns(req);
     const realFields = [...columns].filter((column) => fieldsByName.has(column));
-    const batches = client.searchAll(table.table_id, deadline, {
+    const batches = client.searchAll(tableId, deadline, {
       // field_names must name real fields; record_id rides along on every record anyway
       fieldNames: realFields.length > 0 ? realFields : undefined,
       conditions: pushdownConditions(req.and, fieldsByName),
@@ -212,13 +218,13 @@ export class LarkConnector extends AtlasConnector {
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
+    const { meta, table } = await this.resolveTable(client, req.table, deadline);
+    const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
     const offset = req.offset ?? 0;
     // sort and offset need the whole result before the first row can leave
     if (req.sort.length > 0 || offset > 0) {
-      const { meta, table } = await this.resolveTable(client, req.table, deadline);
-      const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
       const rows: SourceRow[] = [];
-      for await (const batch of this.scan(client, req, deadline)) rows.push(...batch);
+      for await (const batch of this.scan(client, req, deadline, table.table_id, fieldsByName)) rows.push(...batch);
       sortRows(rows, req.sort, fieldTypes(catalogFields(fieldsByName)));
       const end = req.limit !== undefined ? offset + req.limit : undefined;
       const window = rows.slice(offset, end);
@@ -228,7 +234,7 @@ export class LarkConnector extends AtlasConnector {
       return;
     }
     let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const kept of this.scan(client, req, deadline)) {
+    for await (const kept of this.scan(client, req, deadline, table.table_id, fieldsByName)) {
       const capped = kept.length > remaining ? kept.slice(0, remaining) : kept;
       remaining -= capped.length;
       if (capped.length > 0) yield project(capped, req.fields);
@@ -239,6 +245,8 @@ export class LarkConnector extends AtlasConnector {
   async count(req: CountRequest): Promise<number> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
+    const { meta, table } = await this.resolveTable(client, req.table, deadline);
+    const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
     // scan-and-tally: lark's filtered total is untested against the residual filters
     const shape: QueryShape = {
       table: req.table,
@@ -247,7 +255,7 @@ export class LarkConnector extends AtlasConnector {
       fields: [],
     };
     let count = 0;
-    for await (const batch of this.scan(client, shape, deadline)) count += batch.length;
+    for await (const batch of this.scan(client, shape, deadline, table.table_id, fieldsByName)) count += batch.length;
     return count;
   }
 
@@ -276,7 +284,7 @@ export class LarkConnector extends AtlasConnector {
       const records = samplePage.items ?? [];
 
       const fields = discoverFields(catalogFields(fieldsByName));
-      const foreignKeys: { field: string; targetTable: string; targetField: string }[] = [];
+      const foreignKeys: DiscoveredTable["foreignKeys"] = [];
 
       for (const field of fields) {
         for (const record of records) {

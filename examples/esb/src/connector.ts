@@ -57,24 +57,14 @@ export class EsbCoreConnector extends AtlasConnector {
     return object;
   }
 
-  private validate(req: QueryShape, object: EsbCoreObject): void {
-    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
-    assertKnownFields(req, object.columns.map((column) => column.name));
-    for (const field of req.fields) {
-      if (!this.catalog.getColumn(object, field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
-    }
-    for (const sort of req.sort ?? []) {
-      if (!this.catalog.getColumn(object, sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
-    }
-  }
-
   private async *scan(
     api: EsbCoreApi,
     req: QueryShape,
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    this.validate(req, object);
+    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
+    assertKnownFields(req, object.columns.map((column) => column.name));
     const fields = [...collectNeededColumns(req, object)];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       deadline.check();

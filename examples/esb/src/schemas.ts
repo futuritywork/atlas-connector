@@ -6,6 +6,7 @@ import {
   AtlasValue,
   Filter,
   type AtlasType,
+  type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
 import { z } from "zod";
@@ -23,7 +24,7 @@ const EsbDatetime = z.union([CanonicalDatetime, AtlasDatetime]);
 const EsbBoolean = z.union([AtlasBoolean, z.literal(0), z.literal(1)]).transform(Boolean);
 
 export const EsbDatetimeValue = EsbDatetime.nullable();
-export const EsbDateValue = AtlasDate.nullable();
+const EsbDateValue = AtlasDate.nullable();
 
 export const EsbEnvelope = z.looseObject({});
 export type EsbEnvelope = z.infer<typeof EsbEnvelope>;
@@ -133,7 +134,7 @@ export function EsbRow(object: EsbCoreObject, fields?: readonly string[]): z.Zod
     const value = rowValue(column.type);
     shape[column.name] = column.nullable ? value.nullable().optional() : value;
   }
-  const projection = z.object(shape).strip().pipe(z.record(z.string(), AtlasValue));
+  const projection = z.object(shape).pipe(z.record(z.string(), AtlasValue));
   // A row contributing no catalog field is not a row of this entity: without this, an all-nullable
   // object like goods_deliveries accepts arbitrary JSON as {}. count() projects to nothing on
   // purpose, though, so an empty selection has no field to require.
@@ -163,14 +164,9 @@ const StringFilterValue = z.string().nullable();
 const NumericFilterValue = AtlasNumeric.nullable();
 const BooleanFilterValue = z.boolean().nullable();
 
-type FilterSet = {
-  and: Filter[];
-  or?: Filter[][];
-};
-
 export function EsbFilterSet(
   fieldTypes: Readonly<Record<string, AtlasType>>,
-): z.ZodType<FilterSet> {
+): z.ZodType<Pick<NativeQueryRequest, "and" | "or">> {
   const fieldOfType = (...types: AtlasType[]) =>
     z.string().refine((field) => {
       const type = fieldTypes[field];

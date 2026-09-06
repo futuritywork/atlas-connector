@@ -214,6 +214,9 @@ bounds. `AtlasJson`, `SourceCapabilitiesWire`, `CredentialField`,
 `Catalog<T>` retains table extensions. Samples, statistics, relationships, and
 availability checks stay with the connector that obtains them.
 
+Catalog construction rejects duplicate table or column names. Lookups read the
+current catalog, so metadata changes do not leave a separate stale index.
+
 **`serve(connector, { token, port?, hostname? })`**: boots the HTTP server;
 returns `{ app, url, stop }`. Boot-fails on a token under 32 chars or an
 invalid capability doc. `createApp(connector, { token })` returns the Elysia
@@ -227,7 +230,8 @@ app for tests and embedding.
 
 **Kit**: `applyFilters(rows, { and, or? }, fieldTypes?)` evaluates filters in
 memory with the SQL engine's exact semantics (`nin` keeps nulls, empty `in`
-matches nothing, ...). `assertKnownFields(req, fields)` raises the 422.
+matches nothing, ...). `assertKnownFields(req, fields)` rejects unknown filter,
+projection, and sort fields with 422 before fetching rows.
 `columnCountsFromValues`, `linkFromValues`, `grainFromValues`,
 `sampleFromValues` compute probe answers from fetched values;
 `NEAR_UNIQUE_MIN_SHARE`, `DUP_SAMPLE_CAP`, `ORPHAN_SAMPLE_CAP` are the

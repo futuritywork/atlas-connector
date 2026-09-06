@@ -1,15 +1,21 @@
 import { unsupported } from "../serve/errors";
-import type { Filter } from "../wire/vocabulary";
+import type { SourceQueryWire } from "../wire/schemas";
 
-// 422, never unfiltered rows: Atlas trusts every answered row to satisfy every filter it sent
+// Every requested field must be declared, including fields used only for filtering or sorting.
 export function assertKnownFields(
-  req: { and: Filter[]; or?: Filter[][] },
+  req: Pick<SourceQueryWire, "and" | "or"> & Partial<Pick<SourceQueryWire, "fields" | "sort">>,
   knownFieldNames: Iterable<string>,
 ): void {
   const known = new Set(knownFieldNames);
-  for (const filter of [...req.and, ...(req.or ?? []).flat()]) {
-    if (!known.has(filter.field)) {
-      throw unsupported(`unknown filter field '${filter.field}'`);
+  const requested = [
+    ...req.and,
+    ...(req.or ?? []).flat(),
+    ...(req.sort ?? []),
+    ...(req.fields ?? []).map((field) => ({ field })),
+  ];
+  for (const { field } of requested) {
+    if (!known.has(field)) {
+      throw unsupported(`unknown field '${field}'`);
     }
   }
 }
