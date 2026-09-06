@@ -1,6 +1,6 @@
 # examples
 
-three reference connectors built on `@futurity/atlas-connector`, across the SQL and
+four reference connectors built on `@futurity/atlas-connector`, across the SQL and
 REST/ERP paths. all are multi-tenant the same way: the credentials arrive on every
 request, so one running process serves any number of databases, bases, or source
 accounts and stores none of them.
@@ -14,6 +14,8 @@ accounts and stores none of them.
   AtlasConnector`: `check`, `query`, `count`, and `discover` are hand-written,
   pushing the server-side filter slice and running the residual through
   `applyFilters`. It demonstrates the general REST connector shape.
+
+- **[stamps](./stamps)**: a read-only REST connector for Stamps API v4. it exposes stores and cursor-paginated rewards, validates every upstream response, applies the full Atlas filter vocabulary locally, and accepts each tenant's merchant token per request.
 
 - **[esb](./esb)**: a complete REST/ERP connector for ESB Core 2.0. It carries a
   curated 39-entity catalog, strict authentication and response validation,
@@ -35,4 +37,11 @@ see the root README and the futurity docs for the design walkthrough.
 
 ## the hosted demo
 
-`bun run start` at the repo root runs `examples/index.ts`: one process, each connector mounted at `/<slug>` on one origin, one `ATLAS_CONNECTOR_TOKEN` for the host. a source registers with the prefix as its base url, e.g. `https://<host>/lark-base` or `https://<host>/esb-core`; the capability doc is at `<base>/.well-known/futurity/atlas.json`. lark and esb-core are in it: brightline opens a pool to whatever `databaseUrl` a caller sends, so it stays off any public host. esb-core is process-local by design, so run the demo host as a single replica.
+CI runs `bun run scripts/smoke-examples.ts` after seeding Brightline. The script
+checks the SQL example and discovers hosted connectors from the root manifest,
+so registering a connector in `examples/index.ts` includes it in the smoke check.
+It requires `ATLAS_CONNECTOR_TOKEN` and the seeded `CONNECTOR_DATABASE_URL`.
+Entrypoints report their OS-assigned listening URL over Bun IPC; the script
+bounds each subprocess to 30 seconds and stops it when finished.
+
+`bun run start` at the repo root runs `examples/index.ts`: one process, each connector mounted at `/<slug>` on one origin, one `ATLAS_CONNECTOR_TOKEN` for the host. a source registers with the prefix as its base url, e.g. `https://<host>/lark-base`, `https://<host>/esb-core`, or `https://<host>/stamps`; the capability doc is at `<base>/.well-known/futurity/atlas.json`. lark, esb-core, and stamps are in it: brightline opens a pool to whatever `databaseUrl` a caller sends, so it stays off any public host. esb-core is process-local by design, so run the demo host as a single replica.

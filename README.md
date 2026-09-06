@@ -128,10 +128,11 @@ filter you cannot answer into a 422 (rows that skipped a filter read as rows
 that matched it), and `columnCountsFromValues` / `linkFromValues` /
 `grainFromValues` turn fetched values into probe answers.
 
-A REST connector authors its own `capability.ts`, the honesty contract. Only
-you know which ops your pushdown + `applyFilters` combination honors, and only
-you know which credentials your API needs; every flag is earned, and the
-starter begins narrow. See [`examples/lark`](examples/lark) for a metadata-led
+A REST connector authors its own capability document alongside the connector;
+the starter keeps it in `capability.ts`. Only you know which operators your
+pushdown and `applyFilters` combination honors, and only you know which
+credentials your API needs; every flag is earned, and the starter begins narrow.
+See [`examples/lark`](examples/lark) for a metadata-led
 REST source and [`examples/esb`](examples/esb) for a complete fixed-catalog ERP
 connector with strict envelopes, partial discovery, paging, sorting, and
 process-local token coordination.
@@ -146,7 +147,7 @@ bearer-guarded POST endpoints (`/check`, `/discovery`, `/query`,
 `credentials` and `timeoutMs`. The wire contract is defined, executably, by the
 Zod schemas in [`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers,
 stream lines) and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the
-capability doc). [`examples/`](examples) holds three complete connectors across the SQL and
+capability doc). [`examples/`](examples) holds four complete connectors across the SQL and
 REST/ERP paths. Before registering a connector with Atlas, grade it with the
 `atlas-conform` conformance runner.
 
@@ -179,10 +180,8 @@ bounds. `AtlasJson`, `SourceCapabilitiesWire`, `CredentialField`,
 
 **`serve(connector, { token, port?, hostname? })`**: boots the HTTP server;
 returns `{ app, url, stop }`. Boot-fails on a token under 32 chars or an
-invalid capability doc, warns when advertised endpoints and overridden methods
-disagree, and logs which profiling methods still scan through `query()`.
-`createApp(connector, { token })` returns the Elysia app for tests and
-embedding.
+invalid capability doc. `createApp(connector, { token })` returns the Elysia
+app for tests and embedding.
 
 **Errors and http**: `ConnectorError` plus the constructors `badRequest`,
 `unauthorized`, `unknownEntity`, `unsupported`, `timeout`; `parseBody`

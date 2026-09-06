@@ -17,7 +17,7 @@ jobs:
       - name: typecheck cli
         run: bunx tsc --noEmit -p cli
       - name: typecheck the hosted entrypoint and tests
-        run: bunx tsc --noEmit --strict --target esnext --module preserve --moduleResolution bundler --types bun --skipLibCheck --verbatimModuleSyntax --allowImportingTsExtensions examples/index.ts examples/host.test.ts
+        run: bunx tsc --noEmit --strict --target esnext --module preserve --moduleResolution bundler --types bun --skipLibCheck --verbatimModuleSyntax --allowImportingTsExtensions examples/index.ts examples/host.test.ts scripts/smoke-examples.ts
       # the vocabulary/schema drift guard: the monorepo carries a structurally identical copy of
       # the wire vocabulary and its own agreement test; this half pins the SDK to the frozen
       # protocol so drift fails loudly on whichever side moved
@@ -53,45 +53,5 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: seed the example database
         run: bun run examples/brightline-crm/scripts/seed.ts
-      - name: boot the example connector
-        run: |
-          bun run examples/brightline-crm/src/index.ts &
-          for i in $(seq 1 30); do
-            curl -fsS -o /dev/null http://localhost:4100/.well-known/futurity/atlas.json && break
-            sleep 1
-          done
-      - name: smoke the well-known doc
-        run: |
-          doc=$(curl -fsS http://localhost:4100/.well-known/futurity/atlas.json)
-          echo "$doc"
-          echo "$doc" | grep -q '"protocolVersion":1'
-          echo "$doc" | grep -q '"slug":"brightline"'
-          echo "$doc" | grep -q '"key":"databaseUrl"'
-      - name: smoke the credential check
-        run: |
-          body="{\"credentials\":{\"databaseUrl\":\"$CONNECTOR_DATABASE_URL\"},\"timeoutMs\":10000}"
-          answer=$(curl -fsS -X POST http://localhost:4100/check \
-            -H "authorization: Bearer $ATLAS_CONNECTOR_TOKEN" \
-            -H "content-type: application/json" \
-            -d "$body")
-          echo "$answer"
-          echo "$answer" | grep -q '"ok":true'
-      - name: smoke a query
-        run: |
-          body="{\"table\":\"owners\",\"and\":[],\"sort\":[],\"fields\":[\"id\"],\"limit\":1,\"credentials\":{\"databaseUrl\":\"$CONNECTOR_DATABASE_URL\"},\"timeoutMs\":10000}"
-          answer=$(curl -fsS -X POST http://localhost:4100/query \
-            -H "authorization: Bearer $ATLAS_CONNECTOR_TOKEN" \
-            -H "content-type: application/json" \
-            -d "$body")
-          echo "$answer"
-          echo "$answer" | grep -q '"rows":\[{'
-      - name: boot the hosted entrypoint and smoke the lark doc
-        run: |
-          PORT=4101 bun run examples/index.ts &
-          for i in $(seq 1 30); do
-            curl -fsS -o /dev/null http://localhost:4101/lark-base/.well-known/futurity/atlas.json && break
-            sleep 1
-          done
-          doc=$(curl -fsS http://localhost:4101/lark-base/.well-known/futurity/atlas.json)
-          echo "$doc"
-          echo "$doc" | grep -q '"slug":"lark-base"'
+      - name: smoke the examples
+        run: bun run scripts/smoke-examples.ts
