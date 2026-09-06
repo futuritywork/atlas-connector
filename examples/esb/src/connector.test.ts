@@ -146,7 +146,7 @@ describe("ESB Core capability and catalog", () => {
       description: "One",
       mode: "paged",
       primaryKey: "id",
-      columns: [{ name: "id", type: "number", nullable: false, description: "ID" }],
+      columns: [{ name: "id", type: "number", nullable: false, unique: true, description: "ID" }],
     };
     expect(() => validateEsbCoreCatalog([base, { ...base }])).toThrow(/duplicate ESB Core table/);
     expect(() => validateEsbCoreCatalog([{ ...base, columns: [base.columns[0]!, base.columns[0]!] }])).toThrow(

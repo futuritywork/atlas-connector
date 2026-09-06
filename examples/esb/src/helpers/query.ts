@@ -27,7 +27,7 @@ function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>
 export function sortRows(
   rows: SourceRow[],
   sort: Array<{ field: string; dir: "asc" | "desc" }>,
-  fieldTypes: ReadonlyMap<string, AtlasType>,
+  fieldTypes: Readonly<Record<string, AtlasType>>,
 ): void {
   rows.sort((a, b) => {
     for (const key of sort) {
@@ -37,7 +37,7 @@ export function sortRows(
         if (left === null && right === null) continue;
         return left === null ? 1 : -1;
       }
-      const type = fieldTypes.get(key.field);
+      const type = fieldTypes[key.field];
       if (type === undefined) throw new Error(`esb-core: no catalog type for sort field '${key.field}'`);
       const order = compareCells(left, right, type);
       if (order !== 0) return key.dir === "desc" ? -order : order;

@@ -4,6 +4,7 @@ import { createApp, type NativeQueryRequest } from "@futurity/atlas-connector";
 import { Elysia } from "elysia";
 import { EsbCoreConnector } from "./esb/src/connector";
 import { resetEsbCoreTokenCacheForTests } from "./esb/src/esb-api";
+import { LarkConnector } from "./lark/src/connector";
 
 const TOKEN = "host-test-bearer-0123456789abcdef01234567";
 const credentials = { username: "no-upstream", password: "no-upstream" };
@@ -33,13 +34,13 @@ const query: NativeQueryRequest = {
   limit: 1,
 };
 
-const app = new Elysia().group("/esb-core", (group) =>
-  group.use(createApp(new EsbCoreConnector(), { token: TOKEN })),
-);
+const app = new Elysia()
+  .group("/esb-core", (group) => group.use(createApp(new EsbCoreConnector(), { token: TOKEN })))
+  .group("/lark-base", (group) => group.use(createApp(new LarkConnector(), { token: TOKEN })));
 
-function post(path: string, body: unknown, token = TOKEN): Promise<Response> {
+function post(path: string, body: unknown, token = TOKEN, slug = "esb-core"): Promise<Response> {
   return app.handle(
-    new Request(`http://connector.test/esb-core${path}`, {
+    new Request(`http://connector.test/${slug}${path}`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -123,4 +124,77 @@ describe("ESB in the shared host", () => {
     expect(response.status).toBe(401);
     expect((await response.json()).error.code).toBe("unauthorized");
   });
+});
+
+test("Lark discovery owns filtering, numeric sorting, projection, and count in the shared host", async () => {
+  globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
+    const path = new URL(input instanceof Request ? input.url : input).pathname;
+    if (path.endsWith("/tenant_access_token/internal")) {
+      return Response.json({ code: 0, tenant_access_token: "host-lark-token", expire: 7200 });
+    }
+    if (path.endsWith("/tables")) {
+      return Response.json({ code: 0, data: { items: [{ table_id: "tbl1", name: "deals" }], has_more: false } });
+    }
+    if (path.endsWith("/fields")) {
+      return Response.json({ code: 0, data: { items: [
+        { field_name: "code", type: 1, ui_type: "Text" },
+        { field_name: "amount", type: 2, ui_type: "Number" },
+      ], has_more: false } });
+    }
+    if (path.endsWith("/records/search")) {
+      return Response.json({ code: 0, data: { items: [
+        { record_id: "low", fields: { code: "01", amount: 2e-8 } },
+        { record_id: "high", fields: { code: "01", amount: 1e-7 } },
+        { record_id: "null", fields: { code: "01" } },
+        { record_id: "two", fields: { code: "01", amount: 2 } },
+        { record_id: "other", fields: { code: "1", amount: 100 } },
+      ], has_more: false, total: 5 } });
+    }
+    throw new Error(`unexpected Lark request ${path}`);
+  }, { preconnect: realFetch.preconnect });
+
+  const connection = {
+    credentials: { appId: "host-lark", appSecret: "host-lark-secret", appToken: "host-base" },
+    timeoutMs: 1_000,
+  };
+  const discovery = await post("/discovery", connection, TOKEN, "lark-base");
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).tables[0]).toMatchObject({
+    name: "deals",
+    primaryKey: ["record_id"],
+    fields: [
+      { name: "record_id", type: "string", nullable: false, unique: true },
+      { name: "code", type: "string", nullable: true },
+      { name: "amount", type: "number", nullable: true },
+    ],
+  });
+  const selection = {
+    ...connection,
+    table: "deals",
+    and: [{ field: "code", op: "eq", value: "01" }],
+    fieldTypes: { code: "number", amount: "string" },
+  };
+  const result = await post("/query", {
+    ...selection,
+    fields: ["record_id", "amount"],
+    sort: [{ field: "amount", dir: "desc" }],
+  }, TOKEN, "lark-base");
+  expect(result.status).toBe(200);
+  expect(await result.json()).toEqual({ rows: [
+    { record_id: "two", amount: 2 },
+    { record_id: "high", amount: 1e-7 },
+    { record_id: "low", amount: 2e-8 },
+    { record_id: "null", amount: null },
+  ] });
+  const count = await post("/count", selection, TOKEN, "lark-base");
+  expect(count.status).toBe(200);
+  expect(await count.json()).toEqual({ count: 4 });
+  for (const value of [1e-7, "0.0000001"]) {
+    const numeric = await post("/count", {
+      ...selection,
+      and: [{ field: "amount", op: "eq", value }],
+    }, TOKEN, "lark-base");
+    expect(numeric.status).toBe(200);
+    expect(await numeric.json()).toEqual({ count: 1 });
+  }
 });

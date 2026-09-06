@@ -1,4 +1,4 @@
-import type { DiscoveredField, DiscoveredTable } from "@futurity/atlas-connector";
+import { discoverFields, type DiscoveredTable } from "@futurity/atlas-connector";
 import { EsbCoreError } from "../esb-api";
 import type { EsbCoreObject } from "../types";
 
@@ -72,21 +72,12 @@ export async function mapConcurrent<T>(
 }
 
 export function toDiscoveredTable(object: EsbCoreObject): DiscoveredTable {
-  const fields: DiscoveredField[] = object.columns.map((column) => ({
-    name: column.name,
-    sourceColumn: column.name,
-    type: column.type,
-    nullable: column.nullable,
-    unique: object.primaryKey === column.name,
-    samples: [],
-    sourceDescription: column.description,
-  }));
   return {
     name: object.name,
     sourceDescription: object.description,
     storesRows: true,
     primaryKey: object.primaryKey ? [object.primaryKey] : [],
     foreignKeys: [],
-    fields,
+    fields: discoverFields(object.columns),
   };
 }

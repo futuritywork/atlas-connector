@@ -4,9 +4,10 @@ import {
   AtlasConnector,
   badRequest,
   CONNECTOR_LIMITS,
+  defineCatalog,
+  fieldTypes,
   unknownEntity,
   unsupported,
-  type AtlasType,
   type CheckRequest,
   type CountRequest,
   type DiscoveryAnswer,
@@ -40,7 +41,7 @@ const MAX_PAGES = 20_000;
 
 export class EsbCoreConnector extends AtlasConnector {
   readonly slug = "esb-core";
-  private readonly objectsByName = new Map(ESB_CORE_CATALOG.map((object) => [object.name, object]));
+  private readonly catalog = defineCatalog(ESB_CORE_CATALOG);
 
   capability() {
     return ATLAS_JSON;
@@ -51,24 +52,19 @@ export class EsbCoreConnector extends AtlasConnector {
   }
 
   private objectFor(table: string): EsbCoreObject {
-    const object = this.objectsByName.get(table);
+    const object = this.catalog.getTable(table);
     if (!object) throw unknownEntity(`unknown table "${table}"`);
     return object;
   }
 
-  private fieldTypes(object: EsbCoreObject): ReadonlyMap<string, AtlasType> {
-    return new Map(object.columns.map((column) => [column.name, column.type]));
-  }
-
   private validate(req: QueryShape, object: EsbCoreObject): void {
     if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
-    const fieldTypes = this.fieldTypes(object);
-    assertKnownFields(req, fieldTypes.keys());
+    assertKnownFields(req, object.columns.map((column) => column.name));
     for (const field of req.fields) {
-      if (!fieldTypes.has(field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
+      if (!this.catalog.getColumn(object, field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
     }
     for (const sort of req.sort ?? []) {
-      if (!fieldTypes.has(sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
+      if (!this.catalog.getColumn(object, sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
     }
   }
 
@@ -99,12 +95,12 @@ export class EsbCoreConnector extends AtlasConnector {
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    const fieldTypes = Object.fromEntries(this.fieldTypes(object));
-    const parsedFilters = EsbFilterSet(fieldTypes).safeParse({ and: req.and, or: req.or });
+    const types = fieldTypes(object.columns);
+    const parsedFilters = EsbFilterSet(types).safeParse({ and: req.and, or: req.or });
     if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
     for await (const batch of this.scan(api, req, deadline)) {
       deadline.check();
-      const filtered = applyFilters(batch, parsedFilters.data, fieldTypes);
+      const filtered = applyFilters(batch, parsedFilters.data, types);
       deadline.check();
       yield filtered;
     }
@@ -119,8 +115,7 @@ export class EsbCoreConnector extends AtlasConnector {
       for await (const batch of this.scanFiltered(api, req, deadline)) rows.push(...batch);
       deadline.check();
       const object = this.objectFor(req.table);
-      const fieldTypes = this.fieldTypes(object);
-      sortRows(rows, req.sort, fieldTypes);
+      sortRows(rows, req.sort, fieldTypes(object.columns));
       const end = req.limit === undefined ? undefined : offset + req.limit;
       const window = rows.slice(offset, end);
       for (let index = 0; index < window.length; index += CONNECTOR_LIMITS.rowsPerBatch) {

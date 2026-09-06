@@ -1,11 +1,4 @@
-import type { AtlasType } from "@futurity/atlas-connector";
-
-export type EsbCoreColumn = {
-  name: string;
-  type: AtlasType;
-  nullable: boolean;
-  description: string;
-};
+import type { Field } from "@futurity/atlas-connector";
 
 export type EsbCoreObject = {
   name: string;
@@ -13,5 +6,5 @@ export type EsbCoreObject = {
   description: string;
   mode: "paged" | "direct";
   primaryKey?: string;
-  columns: EsbCoreColumn[];
+  columns: Field[];
 };

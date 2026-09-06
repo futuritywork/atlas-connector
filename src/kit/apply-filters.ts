@@ -49,6 +49,8 @@ export function decimalCompare(a: string, b: string): number | null {
   return (left.frac < right.frac ? -1 : 1) * flip;
 }
 
+const decimalFormat = new Intl.NumberFormat("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
+
 // null on either side is sql UNKNOWN: no comparator matches, mirroring `col = NULL`.
 // number/decimal columns compare digit-exact; every other declared type compares as bytes;
 // an undeclared column compares digit-exact only when both sides spell a plain decimal.
@@ -56,7 +58,13 @@ function compareValues(value: unknown, bound: unknown, type: AtlasType | undefin
   if (value == null || bound == null) return null;
   const left = String(value);
   const right = String(bound);
-  if (type === "number" || type === "decimal") return decimalCompare(left, right);
+  if (type === "number" || type === "decimal") {
+    // Native doubles may stringify with exponents; decimal strings stay digit-exact.
+    return decimalCompare(
+      typeof value === "number" ? decimalFormat.format(value) : left,
+      typeof bound === "number" ? decimalFormat.format(bound) : right,
+    );
+  }
   if (type === undefined) return decimalCompare(left, right) ?? byteOrderCompare(left, right);
   return byteOrderCompare(left, right);
 }

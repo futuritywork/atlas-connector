@@ -2,6 +2,10 @@ import {
   applyFilters,
   assertKnownFields,
   AtlasConnector,
+  defineCatalog,
+  discoverFields,
+  field,
+  fieldTypes,
   unknownEntity,
   type CheckRequest,
   type CountRequest,
@@ -14,14 +18,23 @@ import { ATLAS_JSON } from "./capability";
 
 // YOUR CODE HERE: the fields your api exposes per table. discovery answers from the same
 // place, so "a field Atlas may filter on" and "a field you declared" stay the same set.
-const FIELDS: Record<string, string[]> = {
-  companies: ["id", "name", "created_at"],
-};
+const catalog = defineCatalog([
+  {
+    name: "companies",
+    description: "Companies exposed by your API",
+    primaryKey: ["id"],
+    columns: [
+      field("id", "string", { unique: true }),
+      field("name", "string"),
+      field("created_at", "datetime"),
+    ],
+  },
+]);
 
-function fieldsOf(table: string): string[] {
-  const fields = FIELDS[table];
-  if (!fields) throw unknownEntity(`unknown table "${table}"`);
-  return fields;
+function tableOf(name: string) {
+  const table = catalog.getTable(name);
+  if (!table) throw unknownEntity(`unknown table "${name}"`);
+  return table;
 }
 
 export class MyConnector extends AtlasConnector {
@@ -41,19 +54,30 @@ export class MyConnector extends AtlasConnector {
   // the rest; project req.fields; honor sort/limit/offset; yield batches of ≤5000 rows.
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     // a filter you cannot answer must 422 HERE: a row that skipped a filter reads as a row that matched it
-    assertKnownFields(req, fieldsOf(req.table));
+    const types = fieldTypes(tableOf(req.table).columns);
+    assertKnownFields(req, Object.keys(types));
+    // Apply residual filters with applyFilters(batch, req, types), using catalog-owned types.
     throw new Error("implement query");
   }
 
   // YOUR CODE HERE: how many rows match req.and/req.or (your count endpoint, or tally query()).
   async count(req: CountRequest): Promise<number> {
-    assertKnownFields(req, fieldsOf(req.table));
+    assertKnownFields(req, Object.keys(fieldTypes(tableOf(req.table).columns)));
     throw new Error("implement count");
   }
 
-  // YOUR CODE HERE: map your api's metadata to tables/fields. return { tables, warnings? }.
-  async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    throw new Error("implement discover");
+  // For a dynamic API, fetch metadata for req.credentials before constructing this catalog.
+  async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+    return {
+      tables: catalog.tables.map((table) => ({
+        name: table.name,
+        sourceDescription: table.description,
+        storesRows: true,
+        primaryKey: table.primaryKey,
+        foreignKeys: [],
+        fields: discoverFields(table.columns),
+      })),
+    };
   }
 
   // profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer

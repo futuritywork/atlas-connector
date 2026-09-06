@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { field } from "@futurity/atlas-connector";
 import { ESB_CORE_CATALOG } from "./catalog";
 import type { EsbCoreObject } from "./types";
 import {
@@ -24,11 +25,11 @@ const TYPED_OBJECT: EsbCoreObject = {
   mode: "paged",
   primaryKey: "id",
   columns: [
-    { name: "id", type: "string", nullable: false, description: "ID" },
-    { name: "businessDate", type: "date", nullable: true, description: "Business Date" },
-    { name: "happenedAt", type: "datetime", nullable: true, description: "Happened At" },
-    { name: "amount", type: "decimal", nullable: true, description: "Amount" },
-    { name: "enabled", type: "boolean", nullable: true, description: "Enabled" },
+    field("id", "string", { unique: true, description: "ID" }),
+    field("businessDate", "date", { nullable: true, description: "Business Date" }),
+    field("happenedAt", "datetime", { nullable: true, description: "Happened At" }),
+    field("amount", "decimal", { nullable: true, description: "Amount" }),
+    field("enabled", "boolean", { nullable: true, description: "Enabled" }),
   ],
 };
 const GOODS_DELIVERIES = ESB_CORE_CATALOG.find((object) => object.name === "goods_deliveries")!;

@@ -43,6 +43,7 @@ const StoreSchema = z.object({
 });
 
 const StoreIndex = z.object({ stores: z.array(StoreSchema) });
+export type Store = z.infer<typeof StoreSchema>;
 const REWARD_TYPES = ["1", "3", "4", "5"] as const;
 const RewardSchema = z.object({
   id: z.number().int().safe(),
@@ -69,6 +70,7 @@ const RewardIndex = z.object({
   rewards: z.array(RewardSchema),
   has_next: z.boolean(),
 });
+export type Reward = z.infer<typeof RewardSchema>;
 
 export class StampsClient {
   private readonly baseUrl: string;
@@ -87,12 +89,12 @@ export class StampsClient {
     this.merchantToken = parsed.data.merchantToken;
   }
 
-  async listStores(): Promise<z.infer<typeof StoreSchema>[]> {
+  async listStores(): Promise<Store[]> {
     const answer = await this.get("/api/v4/stores/", StoreIndex);
     return answer.stores;
   }
 
-  async *listRewards(): AsyncIterable<z.infer<typeof RewardSchema>[]> {
+  async *listRewards(): AsyncIterable<Reward[]> {
     let cursor: number | undefined;
     while (true) {
       const query = new URLSearchParams({ per_page: "100" });

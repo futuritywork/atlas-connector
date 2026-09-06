@@ -1,7 +1,7 @@
 # my-atlas-connector
 
 An Atlas external connector backed by a REST/ERP API. You extend
-`AtlasConnector` and write four methods; the profiling five derive themselves
+`AtlasConnector` and implement upstream reads; the profiling five derive themselves
 from your `query()`. `serve()` owns auth, timeouts, NDJSON framing, and the
 error envelope; your methods receive the parsed request and return plain data.
 
@@ -10,14 +10,21 @@ one deployment serves many tenants and stores nothing between calls.
 
 ## Fill in (`src/connector.ts`)
 
-Every `YOUR CODE HERE` site carries its contract. The four you must write:
+Every `YOUR CODE HERE` site carries its contract. Complete these methods and
+replace the sample catalog with your API's fields:
 
 | method     | returns                                                             |
 | ---------- | ------------------------------------------------------------------- |
 | `check`    | nothing; throws if the credentials are wrong (the tenant reads it)  |
 | `query`    | batches of rows: push what your API filters, `applyFilters()` the rest |
 | `count`    | how many rows match the filters                                     |
-| `discover` | your API's entities as `{ tables, warnings? }`                      |
+| `discover` | supplied from the catalog; fetch tenant metadata first for dynamic APIs |
+
+Declare fields once with SDK `field(name, type, { nullable, unique, description })`
+and `defineCatalog()`. Discovery uses `discoverFields(table.columns)`; local
+filtering uses `fieldTypes(table.columns)` with `applyFilters(batch, req, types)`.
+Both therefore use the same names and Atlas types. `nullable` and `unique`
+default to `false`; set them to match the upstream contract.
 
 `profileColumns`, `profileLink`, `profileGrain`, `exactCount`, and
 `sampleColumnValues` scan through `query()` on the base class and are already
