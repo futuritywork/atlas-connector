@@ -5,7 +5,8 @@ export * from "./wire/limits";
 export * from "./wire/schemas";
 export * from "./wire/atlas-json";
 
-export { AtlasConnector } from "./connector";
+export { AtlasConnector, windowRows } from "./connector";
+export { field, defineCatalog, fieldTypes, discoverFields, type Field, type Catalog } from "./catalog";
 
 export { createApp, serve, type ServeOptions } from "./serve/serve";
 export {

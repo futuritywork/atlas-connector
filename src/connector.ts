@@ -21,6 +21,26 @@ import type {
   TableColumnsProbe,
 } from "./wire/schemas";
 import type { SourceRow } from "./wire/vocabulary";
+import { CONNECTOR_LIMITS } from "./wire/limits";
+
+// Window already-filtered (and, when requested, sorted) rows; early return closes the source iterator.
+export async function* windowRows(
+  batches: AsyncIterable<SourceRow[]> | Iterable<SourceRow[]>,
+  request: Pick<NativeQueryRequest, "offset" | "limit">,
+): AsyncIterable<SourceRow[]> {
+  let offset = request.offset ?? 0;
+  let remaining = request.limit ?? Number.POSITIVE_INFINITY;
+  for await (const batch of batches) {
+    const start = Math.min(offset, batch.length);
+    offset -= start;
+    const end = Math.min(batch.length, start + remaining);
+    for (let index = start; index < end; index += CONNECTOR_LIMITS.rowsPerBatch) {
+      yield batch.slice(index, Math.min(index + CONNECTOR_LIMITS.rowsPerBatch, end));
+    }
+    remaining -= end - start;
+    if (remaining === 0) return;
+  }
+}
 
 // returning mid-iteration ends the for-await, so the producer's cursor closes at the limit
 export async function drainRows(
@@ -63,8 +83,16 @@ export abstract class AtlasConnector {
   /**
    * COUNT(*) of the same filtered request; Atlas paginates and sizes previews with it.
    * an unknown filter field must 422 here too, never widen the count.
+   * The default scans query() with no projected fields; override only for a cheaper source-side count.
    */
-  abstract count(req: CountRequest): Promise<number>;
+  async count(req: CountRequest): Promise<number> {
+    let count = 0;
+    const { table, and, or, fieldTypes, credentials, timeoutMs } = req;
+    for await (const batch of this.query({ table, and, or, fieldTypes, credentials, timeoutMs, fields: [], sort: [] })) {
+      count += batch.length;
+    }
+    return count;
+  }
 
   /**
    * group-by pushdown Atlas tries before folding rows itself; advertise it in `endpoints`.

@@ -55,7 +55,7 @@ class RouteTestConnector extends AtlasConnector {
     yield [{ a: 1 }];
     yield [{ a: 2 }];
   }
-  async count(): Promise<number> {
+  override async count(): Promise<number> {
     return 7;
   }
   override async sampleColumnValues(): Promise<string[]> {

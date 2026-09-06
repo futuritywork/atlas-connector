@@ -4,11 +4,12 @@ import {
   AtlasConnector,
   badRequest,
   CONNECTOR_LIMITS,
+  defineCatalog,
+  fieldTypes,
   unknownEntity,
   unsupported,
-  type AtlasType,
+  windowRows,
   type CheckRequest,
-  type CountRequest,
   type DiscoveryAnswer,
   type DiscoveryRequest,
   type NativeQueryRequest,
@@ -25,12 +26,7 @@ import {
   toInaccessibleVerdict,
   type AvailabilityVerdict,
 } from "./helpers/discovery";
-import {
-  collectNeededColumns,
-  projectRows,
-  sortRows,
-  type QueryShape,
-} from "./helpers/query";
+import { projectRows, sortRows } from "./helpers/query";
 import { EsbFilterSet } from "./schemas";
 import type { EsbCoreObject } from "./types";
 import { EsbCoreApi, makeDeadline, type Deadline } from "./esb-api";
@@ -40,7 +36,7 @@ const MAX_PAGES = 20_000;
 
 export class EsbCoreConnector extends AtlasConnector {
   readonly slug = "esb-core";
-  private readonly objectsByName = new Map(ESB_CORE_CATALOG.map((object) => [object.name, object]));
+  private readonly catalog = defineCatalog(ESB_CORE_CATALOG);
 
   capability() {
     return ATLAS_JSON;
@@ -51,35 +47,21 @@ export class EsbCoreConnector extends AtlasConnector {
   }
 
   private objectFor(table: string): EsbCoreObject {
-    const object = this.objectsByName.get(table);
+    const object = this.catalog.getTable(table);
     if (!object) throw unknownEntity(`unknown table "${table}"`);
     return object;
   }
 
-  private fieldTypes(object: EsbCoreObject): ReadonlyMap<string, AtlasType> {
-    return new Map(object.columns.map((column) => [column.name, column.type]));
-  }
-
-  private validate(req: QueryShape, object: EsbCoreObject): void {
-    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
-    const fieldTypes = this.fieldTypes(object);
-    assertKnownFields(req, fieldTypes.keys());
-    for (const field of req.fields) {
-      if (!fieldTypes.has(field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
-    }
-    for (const sort of req.sort ?? []) {
-      if (!fieldTypes.has(sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
-    }
-  }
-
   private async *scan(
     api: EsbCoreApi,
-    req: QueryShape,
+    req: NativeQueryRequest,
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    this.validate(req, object);
-    const fields = [...collectNeededColumns(req, object)];
+    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
+    const needed = assertKnownFields(req, object.columns.map((column) => column.name));
+    if (object.primaryKey) needed.add(object.primaryKey);
+    const fields = [...needed];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       deadline.check();
       const result = await api.collection(object, page, PAGE_SIZE, deadline, fields);
@@ -95,16 +77,16 @@ export class EsbCoreConnector extends AtlasConnector {
 
   private async *scanFiltered(
     api: EsbCoreApi,
-    req: QueryShape,
+    req: NativeQueryRequest,
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
     const object = this.objectFor(req.table);
-    const fieldTypes = Object.fromEntries(this.fieldTypes(object));
-    const parsedFilters = EsbFilterSet(fieldTypes).safeParse({ and: req.and, or: req.or });
+    const types = fieldTypes(object.columns);
+    const parsedFilters = EsbFilterSet(types).safeParse({ and: req.and, or: req.or });
     if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
     for await (const batch of this.scan(api, req, deadline)) {
       deadline.check();
-      const filtered = applyFilters(batch, parsedFilters.data, fieldTypes);
+      const filtered = applyFilters(batch, parsedFilters.data, types);
       deadline.check();
       yield filtered;
     }
@@ -113,44 +95,19 @@ export class EsbCoreConnector extends AtlasConnector {
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const api = new EsbCoreApi(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
-    const offset = req.offset ?? 0;
-    if (req.sort.length > 0 || offset > 0) {
+    let batches: AsyncIterable<SourceRow[]> | Iterable<SourceRow[]> = this.scanFiltered(api, req, deadline);
+    if (req.sort.length > 0) {
       const rows: SourceRow[] = [];
-      for await (const batch of this.scanFiltered(api, req, deadline)) rows.push(...batch);
+      for await (const batch of batches) rows.push(...batch);
       deadline.check();
       const object = this.objectFor(req.table);
-      const fieldTypes = this.fieldTypes(object);
-      sortRows(rows, req.sort, fieldTypes);
-      const end = req.limit === undefined ? undefined : offset + req.limit;
-      const window = rows.slice(offset, end);
-      for (let index = 0; index < window.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
-        deadline.check();
-        yield projectRows(window.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
-      }
-      return;
+      sortRows(rows, req.sort, fieldTypes(object.columns));
+      batches = [rows];
     }
-
-    let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const batch of this.scanFiltered(api, req, deadline)) {
-      const capped = batch.length > remaining ? batch.slice(0, remaining) : batch;
-      remaining -= capped.length;
-      if (capped.length > 0) yield projectRows(capped, req.fields);
-      if (remaining <= 0) return;
+    for await (const batch of windowRows(batches, req)) {
+      deadline.check();
+      yield projectRows(batch, req.fields);
     }
-  }
-
-  async count(req: CountRequest): Promise<number> {
-    const api = new EsbCoreApi(req.credentials);
-    const deadline = makeDeadline(req.timeoutMs);
-    const shape: QueryShape = {
-      table: req.table,
-      and: req.and,
-      or: req.or,
-      fields: [],
-    };
-    let count = 0;
-    for await (const batch of this.scanFiltered(api, shape, deadline)) count += batch.length;
-    return count;
   }
 
   async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {

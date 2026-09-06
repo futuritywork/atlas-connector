@@ -107,15 +107,16 @@ render.
 
 ## Quickstart: a REST / ERP API
 
-Extend `AtlasConnector`. Four methods carry everything the source alone knows:
+Extend `AtlasConnector`. Three methods carry everything the source alone knows:
 
 | method          | you return                                                                         |
 | --------------- | ---------------------------------------------------------------------------------- |
 | `check(req)`    | nothing; throw if `req.credentials` are wrong, and the tenant reads it              |
 | `query(req)`    | batches of rows (≤5000 each): push what the API filters, `applyFilters()` the rest  |
-| `count(req)`    | how many rows match the filters                                                     |
 | `discover(req)` | the API's entities as `{ tables, warnings? }`                                       |
 
+`count(req)` counts the same filtered `query()` stream with no projected fields
+or pagination. Override it only for a cheaper source-side count.
 The profiling five (`profileColumns`, `profileLink`, `profileGrain`,
 `exactCount`, `sampleColumnValues`) scan through your `query()` on the base
 class and are correct by default; override one only to make it cheaper.
@@ -136,6 +137,36 @@ See [`examples/lark`](examples/lark) for a metadata-led
 REST source and [`examples/esb`](examples/esb) for a complete fixed-catalog ERP
 connector with strict envelopes, partial discovery, paging, sorting, and
 process-local token coordination.
+
+Declare metadata once, then use it for discovery, field lookup, and residual
+filtering. Static APIs and fields fetched at runtime use the same functions:
+
+```ts
+import { defineCatalog, discoverFields, field, fieldTypes } from "@futurity/atlas-connector";
+
+const companies = {
+  name: "companies",
+  columns: [
+    field("id", "number", { nullable: false, unique: true }),
+    field("code", "string", { nullable: true }),
+  ],
+};
+const catalog = defineCatalog([companies]);
+const fields = discoverFields(companies.columns);
+const types = fieldTypes(companies.columns);
+```
+
+`field` defaults to non-nullable, non-unique, and an empty description. Declare
+uniqueness only when the source guarantees it; sampled distinct values are not
+a constraint. Catalogs preserve provider-specific table and column properties.
+Lark derives fields from tenant metadata; SQL adds storage spelling with `col`.
+Provider schemas still own parsing and normalization of upstream responses.
+Do not substitute request-supplied `fieldTypes` for your discovered types.
+
+Sorting and projection remain provider-owned. Sorting requires collecting all
+matching rows before offset/limit; it does not make a paginated upstream API
+globally sorted. Keep nulls last in both directions. Normalize legitimately
+missing cells at ingestion, and do not mask missing required fields as null.
 
 ## The protocol
 
@@ -178,6 +209,15 @@ bounds. `AtlasJson`, `SourceCapabilitiesWire`, `CredentialField`,
 (`discover`), and profiling (`profileColumns`, `profileLink`, `profileGrain`,
 `exactCount`, `sampleColumnValues`, all derived from `query`).
 
+**Catalog**: `field(name, type, { nullable?, unique?, description? })`,
+`defineCatalog(tables)` with `getTable` / `getColumn`, `fieldTypes(fields)`, and
+`discoverFields(fields)`. `Field` derives from the discovery wire contract;
+`Catalog<T>` retains table extensions. Samples, statistics, relationships, and
+availability checks stay with the connector that obtains them.
+
+Catalog construction rejects duplicate table or column names. Lookups read the
+current catalog, so metadata changes do not leave a separate stale index.
+
 **`serve(connector, { token, port?, hostname? })`**: boots the HTTP server;
 returns `{ app, url, stop }`. Boot-fails on a token under 32 chars or an
 invalid capability doc. `createApp(connector, { token })` returns the Elysia
@@ -191,7 +231,13 @@ app for tests and embedding.
 
 **Kit**: `applyFilters(rows, { and, or? }, fieldTypes?)` evaluates filters in
 memory with the SQL engine's exact semantics (`nin` keeps nulls, empty `in`
-matches nothing, ...). `assertKnownFields(req, fields)` raises the 422.
+matches nothing, ...). `assertKnownFields(req, fields)` rejects unknown filter,
+projection, and sort fields with 422 before fetching rows and returns their
+validated `Set<string>` for upstream field selection.
+`windowRows(batches, req)` applies offset and limit to already-filtered batches,
+emits at most 5000 rows per batch, and closes the source iterator on early exit.
+Sort before windowing when requested; project afterward. Only sorting needs
+whole-result buffering. Providers still own pagination and deadline checks.
 `columnCountsFromValues`, `linkFromValues`, `grainFromValues`,
 `sampleFromValues` compute probe answers from fetched values;
 `NEAR_UNIQUE_MIN_SHARE`, `DUP_SAMPLE_CAP`, `ORPHAN_SAMPLE_CAP` are the
@@ -211,6 +257,8 @@ a `help` string on each part.
 
 **Catalog**: `defineCatalog(tables)`, `col(name, wire, type, opts?)`, and the
 `Catalog`/`Table`/`Column`/`CatalogForeignKey`/`WireKind` types.
+`defineCatalog` is the core catalog export; `Column` extends core `Field` with
+SQL storage metadata. The existing `col` signature and SQL imports are unchanged.
 
 **`SqlFlavor`**: the dialect seam (placeholders, ident quoting, date
 rendering, collation pins). v1 ships `postgres()`; other dialects land here.

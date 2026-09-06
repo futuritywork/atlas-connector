@@ -26,10 +26,9 @@ export function connectorRoutes(
     new Elysia()
       // map thrown errors to the wire envelope; sanitized 500 / 400, never a raw stack
       .onError(({ code, error, set, request }) => {
-        const connectorError = ConnectorError.fromCause(error);
-        if (connectorError) {
-          set.status = connectorError.status;
-          return connectorError.body();
+        if (error instanceof ConnectorError) {
+          set.status = error.status;
+          return error.body();
         }
         // scanners hit unknown paths constantly; one plain line, no stack
         if (code === "NOT_FOUND") {
@@ -58,8 +57,7 @@ export function connectorRoutes(
         try {
           await withTimeout(req.timeoutMs, () => connector.check(req));
         } catch (error) {
-          const connectorError = ConnectorError.fromCause(error);
-          if (connectorError) throw connectorError;
+          if (error instanceof ConnectorError) throw error;
           // check_failed's message reaches the tenant verbatim
           set.status = 400;
           return {

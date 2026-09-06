@@ -3,21 +3,24 @@ import {
   assertKnownFields,
   AtlasConnector,
   ConnectorError,
+  defineCatalog,
+  discoverFields,
+  field,
+  fieldTypes,
   OPS,
   unknownEntity,
   unsupported,
+  windowRows,
   type AtlasJson,
   type CheckRequest,
-  type CountRequest,
-  type DiscoveredField,
+  type Field,
   type DiscoveredTable,
   type DiscoveryAnswer,
   type DiscoveryRequest,
   type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
-import { z } from "zod";
-import { StampsClient } from "./stamps-api";
+import { StampsClient, type Store, type Reward } from "./stamps-api";
 
 const ATLAS_JSON: AtlasJson = {
   protocolVersion: 1,
@@ -54,71 +57,56 @@ const ATLAS_JSON: AtlasJson = {
   endpoints: [],
 };
 
-const TableName = z.enum(["stores", "rewards"]);
-type TableName = z.infer<typeof TableName>;
-
-type FieldDefinition = Pick<
-  DiscoveredField,
-  "name" | "type" | "nullable" | "unique"
->;
-
-function field(
-  name: string,
-  type: DiscoveredField["type"],
-  nullable: boolean,
-  unique = false,
-): FieldDefinition {
-  return { name, type, nullable, unique };
-}
-
-const TABLES: Record<TableName, { fields: FieldDefinition[] }> = {
-  stores: {
-    fields: [
-      field("id", "number", false, true),
-      field("name", "string", false),
-      field("code", "string", true),
-      field("area", "string", true),
-      field("display_name", "string", true),
-      field("address", "string", true),
-      field("phone", "string", true),
-      field("email", "string", true),
-      field("slug", "string", true),
-      field("latitude", "number", true),
-      field("longitude", "number", true),
-      field("timezone", "string", true),
-      field("photo_url", "string", true),
-      field("is_active", "boolean", false),
-      field("description", "string", true),
-      field("regency", "string", true),
-      field("province", "string", true),
-    ],
+const catalog = defineCatalog([
+  {
+    name: "stores" as const,
+    columns: [
+      field("id", "number", { nullable: false, unique: true }),
+      field("name", "string", { nullable: false }),
+      field("code", "string", { nullable: true }),
+      field("area", "string", { nullable: true }),
+      field("display_name", "string", { nullable: true }),
+      field("address", "string", { nullable: true }),
+      field("phone", "string", { nullable: true }),
+      field("email", "string", { nullable: true }),
+      field("slug", "string", { nullable: true }),
+      field("latitude", "number", { nullable: true }),
+      field("longitude", "number", { nullable: true }),
+      field("timezone", "string", { nullable: true }),
+      field("photo_url", "string", { nullable: true }),
+      field("is_active", "boolean", { nullable: false }),
+      field("description", "string", { nullable: true }),
+      field("regency", "string", { nullable: true }),
+      field("province", "string", { nullable: true }),
+    ] satisfies (Field & { name: keyof Store })[],
   },
-  rewards: {
-    fields: [
-      field("id", "number", false, true),
-      field("code", "string", true),
-      field("name", "string", false),
-      field("stamps_to_redeem", "number", false),
-      field("user_redemption_limit", "number", true),
-      field("picture_url", "string", false),
-      field("landscape_url", "string", false),
-      field("is_active", "boolean", false),
-      field("start_date", "date", true),
-      field("end_date", "date", true),
-      field("type", "string", false),
-      field("redeemable", "boolean", false),
-      field("is_visible", "boolean", false),
-      field("merchant_code", "string", false),
-      field("description", "string", false),
-      field("terms", "string", false),
-    ],
+  {
+    name: "rewards" as const,
+    columns: [
+      field("id", "number", { nullable: false, unique: true }),
+      field("code", "string", { nullable: true }),
+      field("name", "string", { nullable: false }),
+      field("stamps_to_redeem", "number", { nullable: false }),
+      field("user_redemption_limit", "number", { nullable: true }),
+      field("picture_url", "string", { nullable: false }),
+      field("landscape_url", "string", { nullable: false }),
+      field("is_active", "boolean", { nullable: false }),
+      field("start_date", "date", { nullable: true }),
+      field("end_date", "date", { nullable: true }),
+      field("type", "string", { nullable: false }),
+      field("redeemable", "boolean", { nullable: false }),
+      field("is_visible", "boolean", { nullable: false }),
+      field("merchant_code", "string", { nullable: false }),
+      field("description", "string", { nullable: false }),
+      field("terms", "string", { nullable: false }),
+    ] satisfies (Field & { name: keyof Reward })[],
   },
-};
+]);
 
-function tableOf(name: string): TableName {
-  const table = TableName.safeParse(name);
-  if (!table.success) throw unknownEntity(`unknown table "${name}"`);
-  return table.data;
+function tableOf(name: string) {
+  const table = catalog.getTable(name);
+  if (!table) throw unknownEntity(`unknown table "${name}"`);
+  return table;
 }
 
 function project(row: SourceRow, fields: string[]): SourceRow {
@@ -144,63 +132,36 @@ export class StampsConnector extends AtlasConnector {
     await new StampsClient(req.credentials, req.timeoutMs).listStores();
   }
 
-  private async *rows(
-    table: TableName,
-    client: StampsClient,
-  ): AsyncIterable<SourceRow[]> {
-    if (table === "stores") {
-      yield await client.listStores();
-      return;
-    }
-    yield* client.listRewards();
-  }
-
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+  private async *scan(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const table = tableOf(req.table);
-    const fieldTypes = Object.fromEntries(TABLES[table].fields.map(({ name, type }) => [name, type]));
-    assertKnownFields(req, Object.keys(fieldTypes));
-    const unknownProjection = req.fields.find((name) => !Object.hasOwn(fieldTypes, name));
-    if (unknownProjection) {
-      throw unsupported(`unknown projection field '${unknownProjection}'`);
-    }
+    const types = fieldTypes(table.columns);
+    assertKnownFields(req, Object.keys(types));
     if (req.sort.length > 0 || (req.offset ?? 0) > 0 || (req.joins?.length ?? 0) > 0) {
       throw unsupported("sorting, offsets, and joins are not supported");
     }
     const client = new StampsClient(req.credentials, req.timeoutMs);
-    let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const batch of this.rows(table, client)) {
-      const filtered = applyFilters(batch, { and: req.and, or: req.or }, fieldTypes);
-      const limited = filtered.length > remaining ? filtered.slice(0, remaining) : filtered;
-      remaining -= limited.length;
-      if (limited.length > 0) yield limited.map((row) => project(row, req.fields));
-      if (remaining <= 0) return;
+    const batches = table.name === "stores" ? [await client.listStores()] : client.listRewards();
+    for await (const batch of batches) {
+      yield applyFilters(batch, req, types);
     }
   }
 
-  async count(req: CountRequest): Promise<number> {
-    const table = tableOf(req.table);
-    const fieldTypes = Object.fromEntries(TABLES[table].fields.map(({ name, type }) => [name, type]));
-    assertKnownFields(req, Object.keys(fieldTypes));
-    const client = new StampsClient(req.credentials, req.timeoutMs);
-    let count = 0;
-    for await (const batch of this.rows(table, client)) {
-      count += applyFilters(batch, { and: req.and, or: req.or }, fieldTypes).length;
+  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+    for await (const batch of windowRows(this.scan(req), req)) {
+      yield batch.map((row) => project(row, req.fields));
     }
-    return count;
   }
 
   async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    const tables: DiscoveredTable[] = TableName.options.map((name) => ({
+    const tables: DiscoveredTable[] = catalog.tables.map(({ name, columns }) => ({
       name,
       sourceDescription: `Stamps API v4 ${name}`,
       storesRows: true,
       primaryKey: ["id"],
       foreignKeys: [],
-      fields: TABLES[name].fields.map((definition) => ({
-        ...definition,
-        sourceColumn: definition.name,
-        samples: [],
-        sourceDescription: `Stamps API v4 ${name}.${definition.name}`,
+      fields: discoverFields(columns).map((field) => ({
+        ...field,
+        sourceDescription: `Stamps API v4 ${name}.${field.name}`,
       })),
     }));
     return { tables };

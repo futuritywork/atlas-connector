@@ -1,5 +1,6 @@
 import {
   timeout,
+  withTimeout,
   type Credentials,
   type SourceRow,
 } from "@futurity/atlas-connector";
@@ -22,7 +23,6 @@ import {
   sanitizeErrorCode,
   tokenCacheKey,
   tokenEntryFor,
-  waitWithinDeadline,
   type Deadline,
   type TokenEntry,
   type TokenState,
@@ -235,7 +235,8 @@ export class EsbCoreApi {
         },
       );
     }
-    return await waitWithinDeadline(this.entry.pending, deadline);
+    const pending = this.entry.pending;
+    return await withTimeout(deadline.remainingMs(), () => pending);
   }
 
   private invalidate(rejectedAccessToken: string): void {

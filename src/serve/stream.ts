@@ -10,8 +10,7 @@ function sanitize(cause: unknown): string {
 
 // a ConnectorError crosses with its own wire code; anything else is an opaque internal
 function errorLine(cause: unknown): StreamLine {
-  const connectorError = ConnectorError.fromCause(cause);
-  if (connectorError) return { error: connectorError.body().error };
+  if (cause instanceof ConnectorError) return { error: cause.body().error };
   return { error: { code: "internal", message: sanitize(cause) } };
 }
 

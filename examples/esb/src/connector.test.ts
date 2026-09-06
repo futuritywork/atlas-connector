@@ -7,7 +7,7 @@ import {
   type SourceRow,
 } from "@futurity/atlas-connector";
 import { ATLAS_JSON } from "./capability";
-import { ESB_CORE_CATALOG, validateEsbCoreCatalog } from "./catalog";
+import { ESB_CORE_CATALOG } from "./catalog";
 import { EsbCoreConnector } from "./connector";
 import { resetEsbCoreTokenCacheForTests } from "./esb-api";
 import type { EsbCoreObject } from "./types";
@@ -115,7 +115,6 @@ describe("ESB Core capability and catalog", () => {
     expect(ESB_CORE_CATALOG).toHaveLength(39);
     expect(new Set(ESB_CORE_CATALOG.map((object) => object.name)).size).toBe(39);
     expect(ESB_CORE_CATALOG.filter((object) => object.mode === "direct")).toHaveLength(4);
-    expect(() => validateEsbCoreCatalog()).not.toThrow();
     for (const object of ESB_CORE_CATALOG) {
       expect(new Set(object.columns.map((column) => column.name)).size).toBe(object.columns.length);
       if (object.primaryKey) expect(object.columns.some((column) => column.name === object.primaryKey)).toBe(true);
@@ -137,22 +136,6 @@ describe("ESB Core capability and catalog", () => {
       type: "date",
       description: "Receipt Date",
     });
-  });
-
-  test("catalog validation rejects duplicate tables, duplicate fields, and undeclared keys", () => {
-    const base: EsbCoreObject = {
-      name: "one",
-      path: "/one",
-      description: "One",
-      mode: "paged",
-      primaryKey: "id",
-      columns: [{ name: "id", type: "number", nullable: false, description: "ID" }],
-    };
-    expect(() => validateEsbCoreCatalog([base, { ...base }])).toThrow(/duplicate ESB Core table/);
-    expect(() => validateEsbCoreCatalog([{ ...base, columns: [base.columns[0]!, base.columns[0]!] }])).toThrow(
-      /duplicate ESB Core field/,
-    );
-    expect(() => validateEsbCoreCatalog([{ ...base, primaryKey: "missing" }])).toThrow(/not a declared field/);
   });
 });
 
@@ -459,18 +442,19 @@ describe("ESB Core query and count", () => {
   });
 
   test("applies offset and limit without a sort", async () => {
-    mockObjectRows(PRODUCTS, {
-      1: {
-        rows: [
-          { productID: 1, productName: "One" },
-          { productID: 2, productName: "Two" },
-          { productID: 3, productName: "Three" },
-          { productID: 4, productName: "Four" },
-        ],
-      },
+    const calls = mockObjectRows(PRODUCTS, {
+      1: { rows: [], next: "next" },
+      2: { rows: [{ productID: 1, productName: "One" }, { productID: 2, productName: "Two" }], next: "next" },
+      3: { rows: [{ productID: 3, productName: "Three" }, { productID: 4, productName: "Four" }], next: "next" },
+      4: { rows: [{ productID: 5, productName: "Five" }, { productID: 6, productName: "Six" }], next: "next" },
+      5: { rows: [{}] },
     });
 
-    expect(await collect(query({ offset: 2, limit: 1 }))).toEqual([{ productID: 3, productName: "Three" }]);
+    expect(await collect(query({
+      fields: ["productName"], and: [{ field: "productID", op: "gte", value: 2 }], offset: 2, limit: 2,
+    }))).toEqual([{ productName: "Four" }, { productName: "Five" }]);
+    expect(calls.filter((call) => call.url.pathname === `/core${PRODUCTS.path}`)
+      .map((call) => call.url.searchParams.get("page"))).toEqual(["1", "2", "3", "4"]);
   });
 
   test("reads direct endpoints once and follows next across empty paged responses", async () => {

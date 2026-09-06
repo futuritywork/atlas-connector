@@ -15,7 +15,6 @@ import type { EsbCoreObject } from "../types";
 export const ESB_CORE_ORIGIN = "https://services.esb.co.id";
 
 export type Deadline = {
-  readonly timeoutMs: number;
   remainingMs(): number;
   check(): void;
 };
@@ -130,7 +129,6 @@ export function makeDeadline(timeoutMs: number): Deadline {
   const end = Date.now() + timeoutMs;
   const exhausted = () => deadlineExceeded(timeoutMs);
   return {
-    timeoutMs,
     remainingMs() {
       const value = end - Date.now();
       if (value <= 0) throw exhausted();
@@ -140,20 +138,6 @@ export function makeDeadline(timeoutMs: number): Deadline {
       if (Date.now() >= end) throw exhausted();
     },
   };
-}
-
-export async function waitWithinDeadline<T>(promise: Promise<T>, deadline: Deadline): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(deadlineExceeded(deadline.timeoutMs)), deadline.remainingMs());
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
 }
 
 export function sanitizedResponseDetail(status: number): string {
