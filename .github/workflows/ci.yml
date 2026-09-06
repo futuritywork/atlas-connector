@@ -16,8 +16,8 @@ jobs:
         run: bunx tsc --noEmit
       - name: typecheck cli
         run: bunx tsc --noEmit -p cli
-      - name: typecheck the hosted entrypoint
-        run: bunx tsc --noEmit --strict --target esnext --module preserve --moduleResolution bundler --types bun --skipLibCheck --verbatimModuleSyntax --allowImportingTsExtensions examples/index.ts
+      - name: typecheck the hosted entrypoint and tests
+        run: bunx tsc --noEmit --strict --target esnext --module preserve --moduleResolution bundler --types bun --skipLibCheck --verbatimModuleSyntax --allowImportingTsExtensions examples/index.ts examples/host.test.ts
       # the vocabulary/schema drift guard: the monorepo carries a structurally identical copy of
       # the wire vocabulary and its own agreement test; this half pins the SDK to the frozen
       # protocol so drift fails loudly on whichever side moved

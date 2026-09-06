@@ -1,10 +1,28 @@
-import { describe, expect, test } from "bun:test";
+// Keep this test outside connector workspaces so it resolves the SDK like the shared host.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createApp, type NativeQueryRequest } from "@futurity/atlas-connector";
 import { Elysia } from "elysia";
 import { EsbCoreConnector } from "./esb/src/connector";
+import { resetEsbCoreTokenCacheForTests } from "./esb/src/esb-api";
 
 const TOKEN = "host-test-bearer-0123456789abcdef01234567";
 const credentials = { username: "no-upstream", password: "no-upstream" };
+const realFetch = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = Object.assign(
+    async () => {
+      throw new Error("host validation tests must not call upstream");
+    },
+    { preconnect: realFetch.preconnect },
+  );
+});
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  resetEsbCoreTokenCacheForTests();
+});
+
 const query: NativeQueryRequest = {
   credentials,
   timeoutMs: 1_000,
@@ -15,7 +33,6 @@ const query: NativeQueryRequest = {
   limit: 1,
 };
 
-// The host imports the SDK from the root; ESB imports it from its own package.
 const app = new Elysia().group("/esb-core", (group) =>
   group.use(createApp(new EsbCoreConnector(), { token: TOKEN })),
 );
