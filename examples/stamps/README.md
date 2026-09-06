@@ -21,6 +21,7 @@ variables and the connector does not persist them.
 
 Only the two documented HTTPS staging origins are accepted. Paths, query
 strings, embedded credentials, ports, and arbitrary hosts are rejected.
+Omitting `baseUrl` or sending an empty string selects the default staging host.
 
 The deployed connector itself requires one host secret:
 
@@ -80,7 +81,8 @@ properties such as store photos, reward membership levels, and reward metadata
 are intentionally omitted because Atlas rows contain scalar values only.
 
 The connector fetches Stamps pages in source order, applies Atlas filters in
-memory, and projects only the requested fields. Sorting, offsets, joins, and
+memory using the discovered catalog types, and projects only the requested fields.
+Sorting, offsets, joins, and
 aggregates are not advertised and are rejected if sent. Counts and profiling
 scan the same rows as queries.
 

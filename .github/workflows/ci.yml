@@ -92,12 +92,11 @@ jobs:
             curl -fsS -o /dev/null http://localhost:4101/lark-base/.well-known/futurity/atlas.json && break
             sleep 1
           done
-          doc=$(curl -fsS http://localhost:4101/lark-base/.well-known/futurity/atlas.json)
-          echo "$doc"
-          echo "$doc" | grep -q '"slug":"lark-base"'
-          stamps_doc=$(curl -fsS http://localhost:4101/stamps/.well-known/futurity/atlas.json)
-          echo "$stamps_doc"
-          echo "$stamps_doc" | grep -q '"slug":"stamps"'
+          for slug in lark-base esb-core stamps; do
+            doc=$(curl -fsS "http://localhost:4101/$slug/.well-known/futurity/atlas.json")
+            echo "$doc"
+            echo "$doc" | grep -q "\"slug\":\"$slug\""
+          done
           status=$(curl -sS -o /tmp/stamps-error.json -w "%{http_code}" \
             -X POST http://localhost:4101/stamps/query \
             -H "authorization: Bearer $ATLAS_CONNECTOR_TOKEN" \

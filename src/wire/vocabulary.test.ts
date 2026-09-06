@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { ATLAS_TYPES, AtlasValue, DATE_GRAINS, DateGrain, Filter, JoinField, OPS, UserSort } from "./vocabulary";
+import {
+  ATLAS_TYPES,
+  AtlasBoolean,
+  AtlasDate,
+  AtlasDatetime,
+  AtlasNumeric,
+  AtlasValue,
+  DATE_GRAINS,
+  DateGrain,
+  Filter,
+  JoinField,
+  OPS,
+  UserSort,
+} from "./vocabulary";
 
 describe("vocabulary constants", () => {
   test("OPS is the 15-op list in stable order", () => {
@@ -51,6 +64,37 @@ describe("AtlasValue", () => {
     for (const value of [undefined, {}, [], new Date()]) {
       expect(AtlasValue.safeParse(value).success).toBe(false);
     }
+  });
+});
+
+describe("typed Atlas values", () => {
+  test("numeric values preserve plain digit-exact strings and safe numbers", () => {
+    for (const value of ["10.50", "9007199254740993", -12, 1.5]) {
+      expect(AtlasNumeric.parse(value)).toBe(value);
+    }
+    for (const value of ["1e3", "not-a-number", 1e-7, 1e21, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
+      expect(AtlasNumeric.safeParse(value).success).toBe(false);
+    }
+  });
+
+  test("boolean values are strict JSON booleans", () => {
+    expect(AtlasBoolean.parse(true)).toBe(true);
+    expect(AtlasBoolean.parse(false)).toBe(false);
+    expect(AtlasBoolean.safeParse(1).success).toBe(false);
+    expect(AtlasBoolean.safeParse("true").success).toBe(false);
+  });
+
+  test("date values are canonical calendar dates", () => {
+    expect(AtlasDate.parse("2024-02-29")).toBe("2024-02-29");
+    expect(AtlasDate.safeParse("2024-02-30").success).toBe(false);
+    expect(AtlasDate.safeParse("2024-01-01T00:00:00Z").success).toBe(false);
+  });
+
+  test("datetime values accept UTC Z and zone-less ISO forms, but not offsets", () => {
+    expect(AtlasDatetime.parse("2024-01-01T00:00:00Z")).toBe("2024-01-01T00:00:00Z");
+    expect(AtlasDatetime.parse("2024-01-01T00:00:00")).toBe("2024-01-01T00:00:00");
+    expect(AtlasDatetime.safeParse("2024-01-01T07:00:00+07:00").success).toBe(false);
+    expect(AtlasDatetime.safeParse("2024-02-30T00:00:00Z").success).toBe(false);
   });
 });
 

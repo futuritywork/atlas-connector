@@ -157,9 +157,9 @@ export class StampsConnector extends AtlasConnector {
 
   async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const table = tableOf(req.table);
-    const fields = TABLES[table].fields.map((definition) => definition.name);
-    assertKnownFields(req, fields);
-    const unknownProjection = req.fields.find((name) => !fields.includes(name));
+    const fieldTypes = Object.fromEntries(TABLES[table].fields.map(({ name, type }) => [name, type]));
+    assertKnownFields(req, Object.keys(fieldTypes));
+    const unknownProjection = req.fields.find((name) => !Object.hasOwn(fieldTypes, name));
     if (unknownProjection) {
       throw unsupported(`unknown projection field '${unknownProjection}'`);
     }
@@ -169,7 +169,7 @@ export class StampsConnector extends AtlasConnector {
     const client = new StampsClient(req.credentials, req.timeoutMs);
     let remaining = req.limit ?? Number.POSITIVE_INFINITY;
     for await (const batch of this.rows(table, client)) {
-      const filtered = applyFilters(batch, { and: req.and, or: req.or }, req.fieldTypes);
+      const filtered = applyFilters(batch, { and: req.and, or: req.or }, fieldTypes);
       const limited = filtered.length > remaining ? filtered.slice(0, remaining) : filtered;
       remaining -= limited.length;
       if (limited.length > 0) yield limited.map((row) => project(row, req.fields));
@@ -179,12 +179,12 @@ export class StampsConnector extends AtlasConnector {
 
   async count(req: CountRequest): Promise<number> {
     const table = tableOf(req.table);
-    const fields = TABLES[table].fields.map((definition) => definition.name);
-    assertKnownFields(req, fields);
+    const fieldTypes = Object.fromEntries(TABLES[table].fields.map(({ name, type }) => [name, type]));
+    assertKnownFields(req, Object.keys(fieldTypes));
     const client = new StampsClient(req.credentials, req.timeoutMs);
     let count = 0;
     for await (const batch of this.rows(table, client)) {
-      count += applyFilters(batch, { and: req.and, or: req.or }, req.fieldTypes).length;
+      count += applyFilters(batch, { and: req.and, or: req.or }, fieldTypes).length;
     }
     return count;
   }

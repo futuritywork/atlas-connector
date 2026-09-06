@@ -32,9 +32,10 @@ with the key absent. Give every field a `placeholder` and a `help` string:
 `help` is short markdown rendered between the label and the input, and it
 should name the exact page in the vendor's console the value is copied from and
 link the vendor's doc for it. Nothing upstream is configured in the connector's
-environment and nothing is persisted between requests, so one deployment serves
-any number of tenants, an added tenant is a form someone fills in, and a leaked
-connector process holds no customer secret to leak.
+environment, so one deployment can serve any number of tenants and an added
+tenant is a form someone fills in. Connectors must not persist raw credentials;
+when an upstream requires session reuse, cache only short-lived tokens under a
+one-way credential digest, as the ESB Core example does.
 
 ## Quickstart: a SQL database
 
@@ -131,6 +132,10 @@ A REST connector authors its own capability document alongside the connector;
 the starter keeps it in `capability.ts`. Only you know which operators your
 pushdown and `applyFilters` combination honors, and only you know which
 credentials your API needs; every flag is earned, and the starter begins narrow.
+See [`examples/lark`](examples/lark) for a metadata-led
+REST source and [`examples/esb`](examples/esb) for a complete fixed-catalog ERP
+connector with strict envelopes, partial discovery, paging, sorting, and
+process-local token coordination.
 
 ## The protocol
 
@@ -142,9 +147,9 @@ bearer-guarded POST endpoints (`/check`, `/discovery`, `/query`,
 `credentials` and `timeoutMs`. The wire contract is defined, executably, by the
 Zod schemas in [`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers,
 stream lines) and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the
-capability doc). [`examples/`](examples) holds three complete connectors across
-the SQL and REST paths. Before registering a connector with Atlas, grade it
-with the `atlas-conform` conformance runner.
+capability doc). [`examples/`](examples) holds four complete connectors across the SQL and
+REST/ERP paths. Before registering a connector with Atlas, grade it with the
+`atlas-conform` conformance runner.
 
 ## API reference
 
@@ -153,7 +158,9 @@ with the `atlas-conform` conformance runner.
 **Vocabulary** (`ATLAS_TYPES`/`AtlasType`, `AtlasValue`, `OPS`/`Op`, `Filter`,
 `UserSort`, `JoinField`, `DATE_GRAINS`/`DateGrain`, `SourceRow`): the shared
 protocol types. `SourceRow` is the wire-legal row a connector returns:
-`Record<string, string | number | boolean | null>`.
+`Record<string, string | number | boolean | null>`. `AtlasNumeric`,
+`AtlasBoolean`, `AtlasDate`, and `AtlasDatetime` validate a
+scalar once its catalog type is known.
 
 **Wire schemas**: every request (`CheckRequest`, `DiscoveryRequest`,
 `NativeQueryRequest`, `NativeQueryStreamRequest`, `CountRequest`,

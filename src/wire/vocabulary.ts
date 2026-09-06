@@ -21,6 +21,25 @@ export type AtlasType = z.infer<typeof AtlasType>;
 export const AtlasValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export type AtlasValue = z.infer<typeof AtlasValue>;
 
+// AtlasValue stays broad because generic wire schemas do not have the field's declared type.
+// These schemas validate values once that catalog context is available.
+const PLAIN_DECIMAL_TEXT = /^[+-]?\d+(?:\.\d+)?$/;
+
+export const AtlasNumeric = z.union([
+  z.string().regex(PLAIN_DECIMAL_TEXT),
+  z
+    .number()
+    .refine(
+      (value) =>
+        PLAIN_DECIMAL_TEXT.test(String(value)) &&
+        (!Number.isInteger(value) || Number.isSafeInteger(value)),
+    ),
+]);
+export const AtlasBoolean = z.boolean();
+export const AtlasDate = z.iso.date();
+// SQL connectors emit zone-less UTC datetimes; REST connectors may emit canonical Z datetimes.
+export const AtlasDatetime = z.iso.datetime({ local: true });
+
 // the wire-legal row a connector returns (narrower than a raw driver row: scalars only)
 export type SourceRow = Record<string, AtlasValue>;
 

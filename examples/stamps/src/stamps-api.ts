@@ -13,7 +13,9 @@ const STAGING_BASE_URLS = [DEFAULT_BASE_URL, "https://staging-crm.stamps.id"] as
 const StampsCredentials = z
   .object({
     merchantToken: z.string().trim().min(1),
-    baseUrl: z.enum(STAGING_BASE_URLS).default(DEFAULT_BASE_URL),
+    baseUrl: z.enum([...STAGING_BASE_URLS, ""])
+      .transform((baseUrl) => baseUrl || DEFAULT_BASE_URL)
+      .default(DEFAULT_BASE_URL),
   })
   .strict();
 

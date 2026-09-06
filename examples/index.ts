@@ -1,10 +1,11 @@
 import { createApp } from "@futurity/atlas-connector";
 import { Elysia } from "elysia";
+import { EsbCoreConnector } from "./esb/src/connector";
 import { LarkConnector } from "./lark/src/connector";
 import { StampsConnector } from "./stamps/src/connector";
 
 // Brightline stays off public hosts because it pools to any databaseUrl a caller sends.
-const CONNECTORS = [new LarkConnector(), new StampsConnector()];
+const CONNECTORS = [new LarkConnector(), new EsbCoreConnector(), new StampsConnector()];
 
 const token = process.env.ATLAS_CONNECTOR_TOKEN;
 if (!token) throw new Error("ATLAS_CONNECTOR_TOKEN must be set");
