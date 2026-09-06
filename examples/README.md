@@ -22,7 +22,16 @@ accounts and stores none of them.
   remain request-scoped; the documented deployment is intentionally one
   replica.
 
-all consume the SDK from the repo root via a `file:../..` link; a standalone connector installs it from npm (`bun add @futurity/atlas-connector`). see the root README and the futurity docs for the design walkthrough.
+all consume the SDK from the repo root via a `file:../..` link. `bunfig.toml`
+selects Bun's hoisted linker so the shared host and the examples load the same SDK
+instance. Keep this setting when deploying the shared host: its typed errors and
+inherited-method checks rely on shared class identity. When switching an existing
+checkout from isolated installs, remove the generated `node_modules` directories
+at the root and under `cli` and `examples/*`, then run `bun install --frozen-lockfile`.
+Bun can otherwise retain the nested links from the isolated install.
+
+A standalone connector installs the SDK from npm (`bun add @futurity/atlas-connector`).
+see the root README and the futurity docs for the design walkthrough.
 
 ## the hosted demo
 
