@@ -7,17 +7,16 @@ import {
   assertKnownFields,
   AtlasConnector,
   byteOrderCompare,
-  CONNECTOR_LIMITS,
   discoverFields,
   field,
   fieldTypes,
   unknownEntity,
   unsupported,
+  windowRows,
   type AtlasType,
   type AtlasValue,
   type CheckRequest,
   type CountExactRequest,
-  type CountRequest,
   type Credentials,
   type DiscoveredTable,
   type DiscoveryAnswer,
@@ -43,10 +42,6 @@ const META_CACHE_MS = 60_000;
 const SAMPLE_PAGE_SIZE = 20;
 const SAMPLES_PER_FIELD = 5;
 
-// the slice of a wire request the scan helpers read
-type QueryShape = Pick<NativeQueryRequest, "table" | "and" | "or" | "fields"> &
-  Partial<Pick<NativeQueryRequest, "sort" | "joins">>;
-
 // one base's metadata, expiring as a unit
 type BaseMeta = {
   at: number;
@@ -68,14 +63,6 @@ function catalogFields(fieldsByName: Map<string, LarkField>) {
         description: `lark ${source.ui_type ?? `type ${source.type}`}`,
       })),
   ];
-}
-
-function neededColumns(req: QueryShape): Set<string> {
-  const needed = new Set(req.fields);
-  for (const filter of req.and) needed.add(filter.field);
-  for (const group of req.or ?? []) for (const filter of group) needed.add(filter.field);
-  for (const sort of req.sort ?? []) needed.add(sort.field);
-  return needed;
 }
 
 function toRow(record: LarkRecord, columns: Iterable<string>, fieldsByName: Map<string, LarkField>): SourceRow {
@@ -188,7 +175,7 @@ export class LarkConnector extends AtlasConnector {
   // pushes the pushable slice of and[]; rows carry exactly the needed columns
   private async *scan(
     client: LarkClient,
-    req: QueryShape,
+    req: NativeQueryRequest,
     deadline: Deadline,
     tableId: string,
     sourceFields: Map<string, LarkField>,
@@ -197,8 +184,7 @@ export class LarkConnector extends AtlasConnector {
     const fieldsByName = new Map(sourceFields);
     fieldsByName.delete(RECORD_ID);
     const types = fieldTypes(catalogFields(fieldsByName));
-    assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
-    const columns = neededColumns(req);
+    const columns = assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
     const realFields = [...columns].filter((column) => fieldsByName.has(column));
     const batches = client.searchAll(tableId, deadline, {
       // field_names must name real fields; record_id rides along on every record anyway
@@ -220,43 +206,18 @@ export class LarkConnector extends AtlasConnector {
     const deadline = makeDeadline(req.timeoutMs);
     const { meta, table } = await this.resolveTable(client, req.table, deadline);
     const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
-    const offset = req.offset ?? 0;
-    // sort and offset need the whole result before the first row can leave
-    if (req.sort.length > 0 || offset > 0) {
+    let batches: AsyncIterable<SourceRow[]> | Iterable<SourceRow[]> =
+      this.scan(client, req, deadline, table.table_id, fieldsByName);
+    if (req.sort.length > 0) {
       const rows: SourceRow[] = [];
-      for await (const batch of this.scan(client, req, deadline, table.table_id, fieldsByName)) rows.push(...batch);
+      for await (const batch of batches) rows.push(...batch);
       sortRows(rows, req.sort, fieldTypes(catalogFields(fieldsByName)));
-      const end = req.limit !== undefined ? offset + req.limit : undefined;
-      const window = rows.slice(offset, end);
-      for (let i = 0; i < window.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
-        yield project(window.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
-      }
-      return;
+      batches = [rows];
     }
-    let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const kept of this.scan(client, req, deadline, table.table_id, fieldsByName)) {
-      const capped = kept.length > remaining ? kept.slice(0, remaining) : kept;
-      remaining -= capped.length;
-      if (capped.length > 0) yield project(capped, req.fields);
-      if (remaining <= 0) return;
+    for await (const batch of windowRows(batches, req)) {
+      deadline.check();
+      yield project(batch, req.fields);
     }
-  }
-
-  async count(req: CountRequest): Promise<number> {
-    const client = clientFor(req.credentials);
-    const deadline = makeDeadline(req.timeoutMs);
-    const { meta, table } = await this.resolveTable(client, req.table, deadline);
-    const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
-    // scan-and-tally: lark's filtered total is untested against the residual filters
-    const shape: QueryShape = {
-      table: req.table,
-      and: req.and,
-      or: req.or,
-      fields: [],
-    };
-    let count = 0;
-    for await (const batch of this.scan(client, shape, deadline, table.table_id, fieldsByName)) count += batch.length;
-    return count;
   }
 
   // every search page carries the table's total

@@ -442,18 +442,19 @@ describe("ESB Core query and count", () => {
   });
 
   test("applies offset and limit without a sort", async () => {
-    mockObjectRows(PRODUCTS, {
-      1: {
-        rows: [
-          { productID: 1, productName: "One" },
-          { productID: 2, productName: "Two" },
-          { productID: 3, productName: "Three" },
-          { productID: 4, productName: "Four" },
-        ],
-      },
+    const calls = mockObjectRows(PRODUCTS, {
+      1: { rows: [], next: "next" },
+      2: { rows: [{ productID: 1, productName: "One" }, { productID: 2, productName: "Two" }], next: "next" },
+      3: { rows: [{ productID: 3, productName: "Three" }, { productID: 4, productName: "Four" }], next: "next" },
+      4: { rows: [{ productID: 5, productName: "Five" }, { productID: 6, productName: "Six" }], next: "next" },
+      5: { rows: [{}] },
     });
 
-    expect(await collect(query({ offset: 2, limit: 1 }))).toEqual([{ productID: 3, productName: "Three" }]);
+    expect(await collect(query({
+      fields: ["productName"], and: [{ field: "productID", op: "gte", value: 2 }], offset: 2, limit: 2,
+    }))).toEqual([{ productName: "Four" }, { productName: "Five" }]);
+    expect(calls.filter((call) => call.url.pathname === `/core${PRODUCTS.path}`)
+      .map((call) => call.url.searchParams.get("page"))).toEqual(["1", "2", "3", "4"]);
   });
 
   test("reads direct endpoints once and follows next across empty paged responses", async () => {

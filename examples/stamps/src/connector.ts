@@ -10,9 +10,9 @@ import {
   OPS,
   unknownEntity,
   unsupported,
+  windowRows,
   type AtlasJson,
   type CheckRequest,
-  type CountRequest,
   type Field,
   type DiscoveredTable,
   type DiscoveryAnswer,
@@ -132,18 +132,7 @@ export class StampsConnector extends AtlasConnector {
     await new StampsClient(req.credentials, req.timeoutMs).listStores();
   }
 
-  private async *rows(
-    table: (typeof catalog.tables)[number]["name"],
-    client: StampsClient,
-  ): AsyncIterable<SourceRow[]> {
-    if (table === "stores") {
-      yield await client.listStores();
-      return;
-    }
-    yield* client.listRewards();
-  }
-
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+  private async *scan(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const table = tableOf(req.table);
     const types = fieldTypes(table.columns);
     assertKnownFields(req, Object.keys(types));
@@ -151,26 +140,16 @@ export class StampsConnector extends AtlasConnector {
       throw unsupported("sorting, offsets, and joins are not supported");
     }
     const client = new StampsClient(req.credentials, req.timeoutMs);
-    let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const batch of this.rows(table.name, client)) {
-      const filtered = applyFilters(batch, { and: req.and, or: req.or }, types);
-      const limited = filtered.length > remaining ? filtered.slice(0, remaining) : filtered;
-      remaining -= limited.length;
-      if (limited.length > 0) yield limited.map((row) => project(row, req.fields));
-      if (remaining <= 0) return;
+    const batches = table.name === "stores" ? [await client.listStores()] : client.listRewards();
+    for await (const batch of batches) {
+      yield applyFilters(batch, req, types);
     }
   }
 
-  async count(req: CountRequest): Promise<number> {
-    const table = tableOf(req.table);
-    const types = fieldTypes(table.columns);
-    assertKnownFields(req, Object.keys(types));
-    const client = new StampsClient(req.credentials, req.timeoutMs);
-    let count = 0;
-    for await (const batch of this.rows(table.name, client)) {
-      count += applyFilters(batch, { and: req.and, or: req.or }, types).length;
+  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+    for await (const batch of windowRows(this.scan(req), req)) {
+      yield batch.map((row) => project(row, req.fields));
     }
-    return count;
   }
 
   async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {

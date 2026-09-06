@@ -6,10 +6,6 @@ import {
   type NativeQueryRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
-import type { EsbCoreObject } from "../types";
-
-export type QueryShape = Pick<NativeQueryRequest, "table" | "and" | "or" | "fields"> &
-  Partial<Pick<NativeQueryRequest, "sort" | "joins">>;
 
 function compareCells(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>, type: AtlasType): number {
   if (type === "number" || type === "decimal") {
@@ -38,15 +34,6 @@ export function sortRows(
     }
     return 0;
   });
-}
-
-export function collectNeededColumns(req: QueryShape, object: EsbCoreObject): Set<string> {
-  const fields = new Set(req.fields);
-  for (const filter of req.and) fields.add(filter.field);
-  for (const group of req.or ?? []) for (const filter of group) fields.add(filter.field);
-  for (const sort of req.sort ?? []) fields.add(sort.field);
-  if (object.primaryKey) fields.add(object.primaryKey);
-  return fields;
 }
 
 export function projectRows(rows: SourceRow[], fields: string[]): SourceRow[] {

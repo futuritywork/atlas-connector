@@ -8,7 +8,6 @@ import {
   fieldTypes,
   unknownEntity,
   type CheckRequest,
-  type CountRequest,
   type DiscoveryAnswer,
   type DiscoveryRequest,
   type NativeQueryRequest,
@@ -60,12 +59,6 @@ export class MyConnector extends AtlasConnector {
     throw new Error("implement query");
   }
 
-  // YOUR CODE HERE: how many rows match req.and/req.or (your count endpoint, or tally query()).
-  async count(req: CountRequest): Promise<number> {
-    assertKnownFields(req, Object.keys(fieldTypes(tableOf(req.table).columns)));
-    throw new Error("implement count");
-  }
-
   // For a dynamic API, fetch metadata for req.credentials before constructing this catalog.
   async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
     return {
@@ -80,6 +73,6 @@ export class MyConnector extends AtlasConnector {
     };
   }
 
-  // profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer
+  // count, profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer
   // by scanning through query(); override one only where your api can do that math cheaper.
 }

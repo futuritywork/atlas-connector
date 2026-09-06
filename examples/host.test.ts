@@ -195,6 +195,11 @@ test("Lark discovery owns filtering, numeric sorting, projection, and count in t
   const count = await post("/count", selection, TOKEN, "lark-base");
   expect(count.status).toBe(200);
   expect(await count.json()).toEqual({ count: 4 });
+  const window = await post("/query", {
+    ...selection, fields: ["record_id"], sort: [], offset: 1, limit: 2,
+  }, TOKEN, "lark-base");
+  expect(window.status).toBe(200);
+  expect(await window.json()).toEqual({ rows: [{ record_id: "high" }, { record_id: "null" }] });
   const identity = await post("/query", {
     ...selection,
     and: [{ field: "record_id", op: "eq", value: "high" }],

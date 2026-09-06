@@ -107,15 +107,16 @@ render.
 
 ## Quickstart: a REST / ERP API
 
-Extend `AtlasConnector`. Four methods carry everything the source alone knows:
+Extend `AtlasConnector`. Three methods carry everything the source alone knows:
 
 | method          | you return                                                                         |
 | --------------- | ---------------------------------------------------------------------------------- |
 | `check(req)`    | nothing; throw if `req.credentials` are wrong, and the tenant reads it              |
 | `query(req)`    | batches of rows (≤5000 each): push what the API filters, `applyFilters()` the rest  |
-| `count(req)`    | how many rows match the filters                                                     |
 | `discover(req)` | the API's entities as `{ tables, warnings? }`                                       |
 
+`count(req)` counts the same filtered `query()` stream with no projected fields
+or pagination. Override it only for a cheaper source-side count.
 The profiling five (`profileColumns`, `profileLink`, `profileGrain`,
 `exactCount`, `sampleColumnValues`) scan through your `query()` on the base
 class and are correct by default; override one only to make it cheaper.
@@ -231,7 +232,12 @@ app for tests and embedding.
 **Kit**: `applyFilters(rows, { and, or? }, fieldTypes?)` evaluates filters in
 memory with the SQL engine's exact semantics (`nin` keeps nulls, empty `in`
 matches nothing, ...). `assertKnownFields(req, fields)` rejects unknown filter,
-projection, and sort fields with 422 before fetching rows.
+projection, and sort fields with 422 before fetching rows and returns their
+validated `Set<string>` for upstream field selection.
+`windowRows(batches, req)` applies offset and limit to already-filtered batches,
+emits at most 5000 rows per batch, and closes the source iterator on early exit.
+Sort before windowing when requested; project afterward. Only sorting needs
+whole-result buffering. Providers still own pagination and deadline checks.
 `columnCountsFromValues`, `linkFromValues`, `grainFromValues`,
 `sampleFromValues` compute probe answers from fetched values;
 `NEAR_UNIQUE_MIN_SHARE`, `DUP_SAMPLE_CAP`, `ORPHAN_SAMPLE_CAP` are the

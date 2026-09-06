@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { AtlasConnector } from "./connector";
+import { AtlasConnector, windowRows } from "./connector";
+import { CONNECTOR_LIMITS } from "./wire/limits";
 import type { AtlasJson } from "./wire/atlas-json";
 import type { DiscoveryAnswer, NativeQueryRequest } from "./wire/schemas";
 import type { SourceRow } from "./wire/vocabulary";
@@ -47,9 +48,6 @@ class Minimal extends AtlasConnector {
     const rows = TABLES[req.table] ?? [];
     yield rows.map((row) => Object.fromEntries(req.fields.map((field) => [field, row[field] ?? null])));
   }
-  async count(): Promise<number> {
-    return 0;
-  }
 }
 
 const credentials = { apiKey: "k" };
@@ -59,6 +57,12 @@ describe("AtlasConnector derived profiling", () => {
   test("exactCount counts the rows query() yields", async () => {
     const connector = new Minimal();
     expect(await connector.exactCount({ table: "orders", ...deadline })).toBe(3);
+    expect(await connector.count({ table: "orders", and: [], ...deadline })).toBe(3);
+    const query: NativeQueryRequest = { table: "orders", and: [], fields: ["id"], sort: [], limit: 1, offset: 1, ...deadline };
+    await connector.count(query);
+    expect(connector.seen.at(-1)).toMatchObject({ fields: [], sort: [] });
+    expect(connector.seen.at(-1)).not.toHaveProperty("limit");
+    expect(connector.seen.at(-1)).not.toHaveProperty("offset");
     expect(connector.seen[0]?.fields).toEqual([]);
   });
 
@@ -117,6 +121,30 @@ describe("AtlasConnector derived profiling", () => {
 });
 
 describe("AtlasConnector base impls", () => {
+  test("windows batches and closes the source on completion or consumer cancellation", async () => {
+    for (const cancel of [false, true]) {
+      let closed = false;
+      async function* source(): AsyncIterable<SourceRow[]> {
+        try {
+          yield [];
+          yield [{ id: -1 }];
+          yield Array.from({ length: CONNECTOR_LIMITS.rowsPerBatch + 3 }, (_, id) => ({ id }));
+          throw new Error("must not fetch beyond the window");
+        } finally {
+          closed = true;
+        }
+      }
+      const batches: SourceRow[][] = [];
+      for await (const batch of windowRows(source(), { offset: 2, limit: CONNECTOR_LIMITS.rowsPerBatch + 1 })) {
+        batches.push(batch);
+        if (cancel) break;
+      }
+      expect(closed).toBe(true);
+      expect(batches.map((batch) => batch.length)).toEqual(cancel ? [5000] : [5000, 1]);
+      expect(batches[0]?.[0]).toEqual({ id: 1 });
+    }
+  });
+
   test("aggregate declines with undefined", async () => {
     expect(
       await new Minimal().aggregate({

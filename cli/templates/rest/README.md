@@ -17,7 +17,6 @@ replace the sample catalog with your API's fields:
 | ---------- | ------------------------------------------------------------------- |
 | `check`    | nothing; throws if the credentials are wrong (the tenant reads it)  |
 | `query`    | batches of rows: push what your API filters, `applyFilters()` the rest |
-| `count`    | how many rows match the filters                                     |
 | `discover` | supplied from the catalog; fetch tenant metadata first for dynamic APIs |
 
 Declare fields once with SDK `field(name, type, { nullable, unique, description })`
@@ -26,7 +25,7 @@ filtering uses `fieldTypes(table.columns)` with `applyFilters(batch, req, types)
 Both therefore use the same names and Atlas types. `nullable` and `unique`
 default to `false`; set them to match the upstream contract.
 
-`profileColumns`, `profileLink`, `profileGrain`, `exactCount`, and
+`count`, `profileColumns`, `profileLink`, `profileGrain`, `exactCount`, and
 `sampleColumnValues` scan through `query()` on the base class and are already
 correct. Override one only to make it cheaper: a source-side `COUNT DISTINCT`,
 a total your API returns on a page. `aggregate()` declines with a 204 until you
@@ -34,7 +33,12 @@ implement it and add `"aggregate"` to `endpoints`.
 
 Unknown filter, projection, or sort fields must throw `unsupported` (422).
 `assertKnownFields(req, fields)` from the kit enforces this in `query` and
-`count`. Rows that skipped a filter look like rows that matched it.
+the inherited `count`. It returns the validated field set for upstream field
+selection. Rows that skipped a filter look like rows that matched it.
+
+Use `windowRows(filteredBatches, req)` before projection to apply offset and
+limit, bound batches to 5000 rows, and close the upstream iterator on early exit.
+Buffer only when sorting is requested; keep upstream pagination in your client.
 
 ## The honesty contract (`src/capability.ts`)
 

@@ -41,9 +41,6 @@ class BootTestConnector extends AtlasConnector {
     return { tables: [] };
   }
   async *query(): AsyncIterable<SourceRow[]> {}
-  async count(): Promise<number> {
-    return 0;
-  }
 }
 
 describe("createApp boot checks", () => {
