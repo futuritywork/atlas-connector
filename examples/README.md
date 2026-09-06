@@ -24,8 +24,23 @@ accounts and stores none of them.
   remain request-scoped; the documented deployment is intentionally one
   replica.
 
-all consume the SDK from the repo root via a `file:../..` link; a standalone connector installs it from npm (`bun add @futurity/atlas-connector`). see the root README and the futurity docs for the design walkthrough.
+all consume the SDK from the repo root via a `file:../..` link. `bunfig.toml`
+selects Bun's hoisted linker so the shared host and the examples load the same SDK
+instance. Keep this setting when deploying the shared host: its typed errors and
+inherited-method checks rely on shared class identity. When switching an existing
+checkout from isolated installs, remove the generated `node_modules` directories
+at the root and under `cli` and `examples/*`, then run `bun install --frozen-lockfile`.
+Bun can otherwise retain the nested links from the isolated install.
+
+A standalone connector installs the SDK from npm (`bun add @futurity/atlas-connector`).
+see the root README and the futurity docs for the design walkthrough.
 
 ## the hosted demo
+
+CI runs `bun run scripts/smoke-examples.ts` after seeding Brightline. The script
+checks the SQL example and discovers hosted connectors from the root manifest,
+so registering a connector in `examples/index.ts` includes it in the smoke check.
+It requires `ATLAS_CONNECTOR_TOKEN` and the seeded `CONNECTOR_DATABASE_URL`,
+uses local ports 4100/4101, and stops the servers when finished.
 
 `bun run start` at the repo root runs `examples/index.ts`: one process, each connector mounted at `/<slug>` on one origin, one `ATLAS_CONNECTOR_TOKEN` for the host. a source registers with the prefix as its base url, e.g. `https://<host>/lark-base`, `https://<host>/esb-core`, or `https://<host>/stamps`; the capability doc is at `<base>/.well-known/futurity/atlas.json`. lark, esb-core, and stamps are in it: brightline opens a pool to whatever `databaseUrl` a caller sends, so it stays off any public host. esb-core is process-local by design, so run the demo host as a single replica.
