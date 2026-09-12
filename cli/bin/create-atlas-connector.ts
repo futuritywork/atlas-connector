@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-// scaffold a new Atlas connector: copy templates/<kind> into <dir>, substitute the slug and port,
-// pin the SDK semver, print next steps. `bun create atlas-connector <dir>` and
-// `bunx create-atlas-connector <dir>` both land here; missing required answers fall back to prompts.
+// scaffold a connector: copy templates/<kind>, substitute the slug and port, pin the SDK semver
+// --name and --kind as args runs unattended; a missing one prompts
 
 import {
   cpSync,
@@ -17,10 +16,25 @@ import * as p from "@clack/prompts";
 
 const PLACEHOLDER = "my-atlas-connector";
 const PLACEHOLDER_PORT = 4100;
+const SLUG_MAX = 40; // an atlas.json slug is ^[a-z][a-z0-9-]{2,39}$
+
 const KINDS = ["sql", "rest"] as const;
 type Kind = (typeof KINDS)[number];
 
-const USAGE = `create-atlas-connector — scaffold a Futurity Atlas external connector
+const CHOICES: Record<Kind, { label: string; hint: string }> = {
+  sql: { label: "a sql database", hint: "extend SqlConnector: a catalog + openPool/run" },
+  rest: {
+    label: "a rest or erp api",
+    hint: "extend AtlasConnector: check/query/count/discovery + an authored capability",
+  },
+};
+
+const NEXT_STEP: Record<Kind, string> = {
+  sql: "declare your tables in src/catalog.ts; src/connector.ts already opens a postgres pool from the tenant's databaseUrl",
+  rest: "fill in the YOUR CODE HERE methods in src/connector.ts; earn each flag in src/capability.ts",
+};
+
+const USAGE = `create-atlas-connector: scaffold a Futurity Atlas external connector
 
 Usage: create-atlas-connector [dir] [options]
 
@@ -37,7 +51,14 @@ Examples:
   create-atlas-connector anaplan-bridge --kind rest --port 4200
 `;
 
-// derive a legal atlas.json slug (^[a-z][a-z0-9-]{2,39}$) from the given name
+function isKind(value: string): value is Kind {
+  return KINDS.some((kind) => kind === value);
+}
+
+function isPort(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
 function toSlug(name: string): string {
   const cleaned = name
     .toLowerCase()
@@ -45,11 +66,11 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
   const prefixed = /^[a-z]/.test(cleaned) ? cleaned : `c-${cleaned}`;
-  const bounded = prefixed.slice(0, 40);
-  return bounded.length >= 3 ? bounded : `${bounded}-connector`.slice(0, 40);
+  const bounded = prefixed.slice(0, SLUG_MAX);
+  return bounded.length >= 3 ? bounded : `${bounded}-connector`.slice(0, SLUG_MAX);
 }
 
-// rewrite a placeholder in every copied text file; template files are all UTF-8 text
+// rewrite a placeholder in every copied file; templates are all utf-8 text
 function substitute(dir: string, from: string, to: string): void {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -63,8 +84,7 @@ function substitute(dir: string, from: string, to: string): void {
   }
 }
 
-// the stamped package.json pins the SDK at the semver this cli shipped with. from a checkout the
-// sibling root IS the SDK; installed, the two packages release in lockstep, so own.version holds
+// the cli and the SDK release in lockstep, so the cli's own version pins it; a sibling checkout wins
 function pinSdkVersion(dest: string): void {
   const own = JSON.parse(
     readFileSync(resolve(import.meta.dir, "..", "package.json"), "utf8"),
@@ -117,18 +137,19 @@ if (values.help) {
   process.exit(0);
 }
 
-let name = values.name ?? positionals[0];
-let kind = values.kind as Kind | undefined;
+const dir = positionals[0];
+let name = values.name ?? (dir ? basename(dir) : undefined);
 let port = values.port ? Number(values.port) : undefined;
 
-if (kind !== undefined && !KINDS.includes(kind)) {
+if (values.kind !== undefined && !isKind(values.kind)) {
   fail(`--kind must be one of: ${KINDS.join(", ")}`);
 }
-if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+let kind: Kind | undefined = values.kind;
+
+if (port !== undefined && !isPort(port)) {
   fail("--port must be an integer between 1 and 65535");
 }
 
-// scripted when both required answers arrived as args; otherwise walk name → kind → port
 if (!name || !kind) {
   p.intro("create-atlas-connector");
   if (!name) {
@@ -144,18 +165,7 @@ if (!name || !kind) {
     kind = unwrap(
       await p.select<Kind>({
         message: "what backs this source?",
-        options: [
-          {
-            value: "sql",
-            label: "a sql database",
-            hint: "extend SqlConnector: a catalog + openPool/run",
-          },
-          {
-            value: "rest",
-            label: "a rest or erp api",
-            hint: "extend AtlasConnector: check/query/count/discover + an authored capability",
-          },
-        ],
+        options: KINDS.map((value) => ({ value, ...CHOICES[value] })),
       }),
     );
   }
@@ -164,10 +174,7 @@ if (!name || !kind) {
       await p.text({
         message: "port",
         initialValue: String(PLACEHOLDER_PORT),
-        validate: (value) => {
-          const n = Number(value);
-          return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : "1-65535";
-        },
+        validate: (value) => (isPort(Number(value)) ? undefined : "1-65535"),
       }),
     );
     port = Number(answer);
@@ -175,10 +182,10 @@ if (!name || !kind) {
   p.outro("scaffolding");
 }
 
-if (!name || !kind) fail("--name and --kind are required");
 port ??= PLACEHOLDER_PORT;
 
-const dest = resolve(process.cwd(), positionals[0] ?? name);
+const target = dir ?? name;
+const dest = resolve(process.cwd(), target);
 if (existsSync(dest) && readdirSync(dest).length > 0) {
   fail(`${dest} already exists and is not empty`);
 }
@@ -195,17 +202,13 @@ if (port !== PLACEHOLDER_PORT) {
 }
 pinSdkVersion(dest);
 
-const fillIn =
-  kind === "sql"
-    ? "declare your tables in src/catalog.ts; src/connector.ts already opens a postgres pool from the tenant's databaseUrl"
-    : "fill in the YOUR CODE HERE methods in src/connector.ts; earn each flag in src/capability.ts";
+process.stdout.write(`Scaffolded '${slug}' (${kind}) at ${dest}
 
-process.stdout.write(`Scaffolded '${slug}' (${kind}) at ${dest}\n\n`);
-process.stdout.write("Next steps:\n");
-process.stdout.write(`  cd ${positionals[0] ?? name}\n`);
-process.stdout.write(
-  "  cp .env.example .env    # set ATLAS_CONNECTOR_TOKEN to a 32+ char secret\n",
-);
-process.stdout.write("  bun install\n");
-process.stdout.write(`  bun run start           # serves on :${port}\n\n`);
-process.stdout.write(`Then ${fillIn}, and point atlas-conform at it to grade the result.\n`);
+Next steps:
+  cd ${target}
+  cp .env.example .env    # set ATLAS_CONNECTOR_TOKEN to a 32+ char secret
+  bun install
+  bun run start           # serves on :${port}
+
+Then ${NEXT_STEP[kind]}, and point atlas-conform at it to grade the result.
+`);
