@@ -6,20 +6,30 @@ export const ATLAS_JSON_PATH = "/.well-known/futurity/atlas.json";
 
 export const ATLAS_JSON_MAX_BYTES = CONNECTOR_LIMITS.docBytes;
 
-const CONNECTOR_SORTS = ["none", "single", "multi"] as const;
+// the optional protocol methods; overriding one adds its route and its entry here
+export const CONNECTOR_ENDPOINTS = ["size", "count", "aggregate", "cardinality", "linkHitRate"] as const;
+export type ConnectorEndpoint = (typeof CONNECTOR_ENDPOINTS)[number];
+
+// vendor ceilings; atlas plans its pulls against them
+export const ConnectorLimitsWire = z
+  .object({
+    pageSizeMax: z.number().int().min(1).optional(), // absent when the vendor sets no page ceiling
+    rowsPerTableMax: z.number().int().min(1).optional(),
+    concurrency: z.number().int().min(1).max(16), // a cursor api is 1
+    offsetMax: z.number().int().min(0).optional(),
+  })
+  .strict();
+export type ConnectorLimits = z.infer<typeof ConnectorLimitsWire>;
 
 export const SourceCapabilitiesWire = z
   .object({
-    operators: z.array(Op).min(1),
+    operators: z.array(Op), // emitted from the pushdown; [] pushes nothing
     dateBucket: z.boolean(),
-    sort: z.enum(CONNECTOR_SORTS),
+    sort: z.enum(["none", "single", "multi"]),
     offset: z.boolean(),
-    maxOffset: z.number().int().min(0).optional(),
-    count: z.enum(["server", "scan", "none"]),
     join: z.boolean(),
-    enforcesDeclaredKeys: z.boolean(),
-    probeConcurrency: z.number().int().min(1).max(8),
-    cheapProbes: z.boolean(),
+    keysEnforced: z.boolean(), // true only when the upstream itself rejects a duplicate
+    limits: ConnectorLimitsWire,
   })
   .strict();
 export type SourceCapabilitiesWire = z.infer<typeof SourceCapabilitiesWire>;
@@ -29,27 +39,24 @@ export const CredentialFieldWire = z
   .object({
     key: z.string(),
     label: z.string(),
-    /** textarea: a multi-line box for a pasted pem or key blob. */
-    type: z.enum(["text", "password", "textarea"]),
-    /** false lets the field stay blank; a blank is omitted from credentials. */
-    required: z.boolean().default(true),
+    type: z.enum(["text", "password", "textarea"]), // textarea for a pasted pem or key blob
+    required: z.boolean().default(true), // a blank is omitted from credentials
     placeholder: z.string().optional(),
-    /** markdown under the label: name the exact vendor console page the value is found on and link the vendor's doc. */
-    help: z.string().optional(),
+    help: z.string().optional(), // markdown under the label
   })
   .strict();
 export type CredentialField = z.infer<typeof CredentialFieldWire>;
 
-// not .strict(): unknown top-level fields are stripped for forward compat.
-// dialect stays an open string; the consuming side narrows it to its dialect
-// set and layers slug-collision + dialect-operator refinements on top
+// not .strict(): unknown top-level fields are stripped for forward compat
 export const AtlasJson = z.object({
   protocolVersion: z.literal(1),
   slug: z.string().regex(/^[a-z][a-z0-9-]{2,39}$/),
-  dialect: z.string().optional(),
+  dialect: z.string().optional(), // open string: the consuming side narrows it to its own dialect set
   capabilities: SourceCapabilitiesWire,
-  // [] only when the source needs no per-tenant secret
-  credentialSchema: z.array(CredentialFieldWire),
-  endpoints: z.array(z.enum(["aggregate"])),
+  credentialSchema: z.array(CredentialFieldWire), // [] only when the source needs no per-tenant secret
+  endpoints: z.array(z.enum(CONNECTOR_ENDPOINTS)),
 });
 export type AtlasJson = z.infer<typeof AtlasJson>;
+
+/** what a connector declares; the SDK fills `endpoints` from the methods it overrides. */
+export type CapabilityDoc = Omit<AtlasJson, "endpoints">;

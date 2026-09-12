@@ -2,20 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { CONNECTOR_LIMITS } from "./limits";
 import {
   AggregateRequest,
+  CardinalityAnswer,
+  CardinalityRequest,
   CheckAnswer,
   CheckRequest,
   CountAnswer,
-  CountExactAnswer,
   CountRequest,
   DiscoveryAnswer,
+  LinkHitRateWire,
   NativeQueryRequest,
   NativeQueryStreamRequest,
-  QueryAnswer,
-  SampleKeyValuesAnswer,
-  SampleKeyValuesRequest,
+  SizeAnswer,
+  SizeRequest,
   SourceQueryWire,
   StreamLine,
-  TableColumnsProbeWire,
 } from "./schemas";
 
 test("CONNECTOR_LIMITS values are pinned", () => {
@@ -77,11 +77,10 @@ describe("requests carry deadlines and the tenant's credentials", () => {
 
   test("credentials are required, string-valued, and never absent", () => {
     const { credentials: _dropped, ...credless } = authed;
+    const numericCredential = { ...fullQuery, ...authed, credentials: { port: 5432 } };
     expect(NativeQueryRequest.safeParse({ ...fullQuery, ...credless }).success).toBe(false);
     expect(NativeQueryRequest.safeParse({ ...fullQuery, ...authed, credentials: {} }).success).toBe(true);
-    expect(
-      NativeQueryRequest.safeParse({ ...fullQuery, ...authed, credentials: { port: 5432 } }).success,
-    ).toBe(false);
+    expect(NativeQueryRequest.safeParse(numericCredential).success).toBe(false);
   });
 
   test("CheckRequest is credentials and a deadline, nothing else to leak", () => {
@@ -93,10 +92,9 @@ describe("requests carry deadlines and the tenant's credentials", () => {
 
   test("stream requests also require idle + max deadlines", () => {
     const base = { ...fullQuery, ...authed };
+    const withDeadlines = { ...base, idleTimeoutMs: 30_000, maxTimeoutMs: 600_000 };
     expect(NativeQueryStreamRequest.safeParse(base).success).toBe(false);
-    expect(
-      NativeQueryStreamRequest.safeParse({ ...base, idleTimeoutMs: 30_000, maxTimeoutMs: 600_000 }).success,
-    ).toBe(true);
+    expect(NativeQueryStreamRequest.safeParse(withDeadlines).success).toBe(true);
   });
 
   test("CountRequest takes filters only", () => {
@@ -105,10 +103,14 @@ describe("requests carry deadlines and the tenant's credentials", () => {
     expect(CountRequest.safeParse({ ...count, sort: [] }).success).toBe(false);
   });
 
-  test("SampleKeyValuesRequest binds a column type", () => {
-    const sample = { table: "t", column: "id", type: "number", limit: 50, ...authed };
-    expect(SampleKeyValuesRequest.safeParse(sample).success).toBe(true);
-    expect(SampleKeyValuesRequest.safeParse({ ...sample, type: "uuid" }).success).toBe(false);
+  test("SizeRequest names one table", () => {
+    expect(SizeRequest.safeParse({ table: "t", ...authed }).success).toBe(true);
+    expect(SizeRequest.safeParse({ ...authed }).success).toBe(false);
+  });
+
+  test("CardinalityRequest names at least one column", () => {
+    expect(CardinalityRequest.safeParse({ table: "t", columns: ["id"], ...authed }).success).toBe(true);
+    expect(CardinalityRequest.safeParse({ table: "t", columns: [], ...authed }).success).toBe(false);
   });
 });
 
@@ -130,31 +132,24 @@ describe("AggregateRequest", () => {
   });
 
   test("avg is not pushable and week is not a grain", () => {
-    expect(
-      AggregateRequest.safeParse({ ...agg, measures: [{ fn: "avg", field: "total", as: "a" }] }).success,
-    ).toBe(false);
-    expect(
-      AggregateRequest.safeParse({ ...agg, groupBy: [{ field: "created_at", as: "w", grain: "week" }] }).success,
-    ).toBe(false);
+    const avgMeasure = { ...agg, measures: [{ fn: "avg", field: "total", as: "a" }] };
+    const weekGrain = { ...agg, groupBy: [{ field: "created_at", as: "w", grain: "week" }] };
+    expect(AggregateRequest.safeParse(avgMeasure).success).toBe(false);
+    expect(AggregateRequest.safeParse(weekGrain).success).toBe(false);
   });
 });
 
 describe("answers are wrapped objects, never bare arrays", () => {
-  test("QueryAnswer wraps rows", () => {
-    expect(QueryAnswer.safeParse({ rows: [{ id: 1, name: "acme", gone: null }] }).success).toBe(true);
-    expect(QueryAnswer.safeParse([{ id: 1 }]).success).toBe(false);
-  });
-
-  test("counts are ints; null exact count sits inside the wrapper", () => {
+  test("counts are ints", () => {
     expect(CountAnswer.safeParse({ count: 12 }).success).toBe(true);
     expect(CountAnswer.safeParse({ count: 1.5 }).success).toBe(false);
-    expect(CountExactAnswer.safeParse({ count: null }).success).toBe(true);
-    expect(CountExactAnswer.safeParse(null).success).toBe(false);
   });
 
-  test("sample key values cross as text", () => {
-    expect(SampleKeyValuesAnswer.safeParse({ values: ["1", "2"] }).success).toBe(true);
-    expect(SampleKeyValuesAnswer.safeParse({ values: [1, 2] }).success).toBe(false);
+  test("a size carries its tier, and a null size sits inside the wrapper", () => {
+    expect(SizeAnswer.safeParse({ size: { rows: 12, exact: false } }).success).toBe(true);
+    expect(SizeAnswer.safeParse({ size: { rows: 12 } }).success).toBe(false);
+    expect(SizeAnswer.safeParse({ size: null }).success).toBe(true);
+    expect(SizeAnswer.safeParse(null).success).toBe(false);
   });
 });
 
@@ -192,17 +187,18 @@ describe("DiscoveryAnswer", () => {
   });
 });
 
-describe("probe answers", () => {
-  test("columns cross as a record, duplicates nullable", () => {
-    const probe = {
-      rows: 100,
-      columns: {
-        id: { nonNull: 100, distinct: 100, duplicates: null },
-        email: { nonNull: 90, distinct: 88, duplicates: { valueCount: 2, maxMultiplicity: 2, samples: ["a@b"] } },
-      },
-    };
-    expect(TableColumnsProbeWire.safeParse(probe).success).toBe(true);
-    expect(TableColumnsProbeWire.safeParse({ ...probe, columns: new Map() }).success).toBe(false);
+describe("measurement answers", () => {
+  test("cardinality crosses as a record, a column the source cannot count nulled", () => {
+    const answer = { columns: { id: { nonNull: 100, distinct: 100 }, notes: null } };
+    expect(CardinalityAnswer.safeParse(answer).success).toBe(true);
+    expect(CardinalityAnswer.safeParse({ columns: new Map() }).success).toBe(false);
+    expect(CardinalityAnswer.safeParse({ columns: { id: { nonNull: 1 } } }).success).toBe(false);
+  });
+
+  test("a link hit rate names the misses it found", () => {
+    const link = { fromNonNull: 4, orphanCount: 1, orphanRate: 0.25, orphanSamples: ["ghost"] };
+    expect(LinkHitRateWire.safeParse(link).success).toBe(true);
+    expect(LinkHitRateWire.safeParse({ ...link, extra: 1 }).success).toBe(false);
   });
 });
 
@@ -212,6 +208,7 @@ describe("StreamLine", () => {
     expect(StreamLine.safeParse({ ping: 1 }).success).toBe(true);
     expect(StreamLine.safeParse({ error: { code: "timeout", message: "query timed out" } }).success).toBe(true);
     expect(StreamLine.safeParse({ end: 1 }).success).toBe(true);
+    expect(StreamLine.safeParse({ served: { filters: true, sort: false, window: false } }).success).toBe(true);
   });
 
   test("empty and oversized batches reject", () => {
@@ -222,8 +219,21 @@ describe("StreamLine", () => {
   });
 
   test("literal markers admit no other values", () => {
+    const partialServed = { filters: true, sort: true }; // a missing claim would silently default
+    const servedWithRows = { filters: true, sort: true, window: true, rows: true };
     expect(StreamLine.safeParse({ ping: 2 }).success).toBe(false);
+    expect(StreamLine.safeParse({ served: partialServed }).success).toBe(false);
+    expect(StreamLine.safeParse({ served: servedWithRows }).success).toBe(false);
     expect(StreamLine.safeParse({ end: 0 }).success).toBe(false);
     expect(StreamLine.safeParse({}).success).toBe(false);
+  });
+
+  test("a line carrying two kinds is malformed, not a first-branch match", () => {
+    const served = { filters: true, sort: true, window: true };
+    expect(StreamLine.safeParse({ served, rows: [{ id: 1 }] }).success).toBe(false);
+    expect(StreamLine.safeParse({ rows: [{ id: 1 }], end: 1 }).success).toBe(false);
+    expect(StreamLine.safeParse({ ping: 1, served }).success).toBe(false);
+    expect(StreamLine.safeParse({ end: 1, error: { code: "timeout", message: "gone" } }).success).toBe(false);
+    expect(StreamLine.safeParse({ rows: [{ id: 1 }], extra: 2 }).success).toBe(false);
   });
 });

@@ -1,6 +1,4 @@
-// the SDK half of the wire-agreement guard. the monorepo carries its own copy of this vocabulary
-// (@futurity/schemas) plus a wire-agreement test against the installed SDK; this file pins the
-// SDK side to the frozen protocol so a drift-inducing edit fails CI even with no monorepo present.
+// pins the sdk to the frozen protocol; @futurity/schemas holds the monorepo half of this guard
 import { describe, expect, test } from "bun:test";
 import { AtlasJson, SourceCapabilitiesWire } from "./atlas-json";
 import { ATLAS_TYPES, DATE_GRAINS, Filter, OPS } from "./vocabulary";
@@ -35,8 +33,7 @@ const PINNED_TYPES = [
 
 const PINNED_GRAINS = ["year", "quarter", "month", "day"] as const;
 
-// verdicts must match the monorepo Filter's on the same corpus; a change to either side of a
-// case here is a protocol change, not a refactor
+// a changed verdict here is a protocol change, not a test fix
 const FILTER_CORPUS: { filter: unknown; ok: boolean }[] = [
   { filter: { field: "a", op: "eq", value: 1 }, ok: true },
   { filter: { field: "a", op: "eq", values: [1] }, ok: false },
@@ -73,7 +70,7 @@ describe("wire vocabulary agreement", () => {
     }
   });
 
-  test("capability doc vocabulary holds: strict flags, slug regex, aggregate-only endpoints", () => {
+  test("capability doc vocabulary holds: strict flags, slug regex, known endpoints", () => {
     const doc = {
       protocolVersion: 1,
       slug: "my-atlas-connector",
@@ -82,26 +79,20 @@ describe("wire vocabulary agreement", () => {
         dateBucket: false,
         sort: "none",
         offset: false,
-        count: "server",
         join: false,
-        enforcesDeclaredKeys: false,
-        probeConcurrency: 4,
-        cheapProbes: false,
+        keysEnforced: false,
+        limits: { concurrency: 4 },
       },
       credentialSchema: [{ key: "apiKey", label: "API key", type: "password" }],
       endpoints: [],
     };
+    const extraFlag = { ...doc.capabilities, extra: true };
+    const unknownOperator = { ...doc.capabilities, operators: ["like"] };
+
     expect(AtlasJson.safeParse(doc).success).toBe(true);
     expect(AtlasJson.safeParse({ ...doc, slug: "X" }).success).toBe(false);
     expect(AtlasJson.safeParse({ ...doc, endpoints: ["probe"] }).success).toBe(false);
-    expect(
-      SourceCapabilitiesWire.safeParse({ ...doc.capabilities, extra: true }).success,
-    ).toBe(false);
-    expect(
-      SourceCapabilitiesWire.safeParse({
-        ...doc.capabilities,
-        operators: ["like"],
-      }).success,
-    ).toBe(false);
+    expect(SourceCapabilitiesWire.safeParse(extraFlag).success).toBe(false);
+    expect(SourceCapabilitiesWire.safeParse(unknownOperator).success).toBe(false);
   });
 });

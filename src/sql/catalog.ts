@@ -4,29 +4,23 @@ import type { AtlasType } from "../wire/vocabulary";
 
 export { defineCatalog } from "../catalog";
 
-// how a column's storage renders onto the wire; picked so the wire spelling never
-// depends on the driver's own decoding of the value
+/** how a column's storage renders onto the wire; the kind decides, never the driver's decoding. */
 export type WireKind =
   | "int" // integer identity or count; JSON number when safe, text past 2^53
-  | "decimal" // cast to exact server-side text, never a JS float
+  | "decimal" // exact server-side text, never a JS float
   | "text"
   | "boolean"
   | "date" // rendered YYYY-MM-DD
   | "datetime" // rendered YYYY-MM-DDTHH:MM:SS, UTC
   | "text_array";
 
-export type Column = Field & {
-  wire: WireKind;
-};
-
-// one declared edge; enforced or not, it is catalog knowledge the orphan probe exists to test
-export type CatalogForeignKey = DiscoveredTable["foreignKeys"][number];
+export type Column = Field & { wire: WireKind };
 
 export type Table = {
   name: string;
   description: string;
   primaryKey: string[];
-  foreignKeys: CatalogForeignKey[];
+  foreignKeys: DiscoveredTable["foreignKeys"];
   columns: Column[];
 };
 

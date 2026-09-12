@@ -1,25 +1,23 @@
 // SqlConnector: every protocol method derived from one abstract run(pool, sql, params) + a catalog
 
 import { createHash } from "node:crypto";
-import { AtlasConnector } from "../connector";
-import type { AtlasJson, CredentialField } from "../wire/atlas-json";
+import { AtlasConnector, type QueryChunk } from "../connector";
+import type { CapabilityDoc, CredentialField } from "../wire/atlas-json";
 import { CONNECTOR_LIMITS } from "../wire/limits";
 import type {
   AggregateRequest,
+  CardinalityRequest,
   CheckRequest,
-  CountExactRequest,
   CountRequest,
   Credentials,
   DiscoveryAnswer,
   DiscoveryRequest,
-  GrainProbe,
-  LinkProbe,
+  EntitySize,
+  LinkHitRate,
+  LinkHitRateRequest,
   NativeQueryRequest,
-  ProbeColumnsRequest,
-  ProbeGrainRequest,
-  ProbeLinkRequest,
-  SampleKeyValuesRequest,
-  TableColumnsProbe,
+  SizeRequest,
+  TableCardinality,
 } from "../wire/schemas";
 import type { SourceRow } from "../wire/vocabulary";
 import { buildAggregate, renderAggregateRows } from "./aggregate";
@@ -27,19 +25,16 @@ import { sqlCapability } from "./capability";
 import type { Catalog } from "./catalog";
 import { discovery } from "./discovery";
 import { postgres, type SqlContext, type SqlFlavor } from "./flavor";
-import * as probes from "./probes";
-import { buildCount, buildSelect, renderRows } from "./select";
+import * as measure from "./measure";
+import { buildCount, buildSelect, type ProjectedColumn, renderRows } from "./select";
 import { requireTable } from "./sql-util";
 
-// open pools; the least recently used closes past this
-const MAX_POOLS = 16;
+const MAX_POOLS = 16; // open pools; the least recently used closes past this
 
 export type Row = Record<string, unknown>;
 
 // an evicted lease closes once inFlight reaches 0
 type PoolLease<Pool> = { pool: Promise<Pool>; inFlight: number; evicted: boolean };
-
-type BuiltSelect = ReturnType<typeof buildSelect>;
 
 // sorted, so key order never changes the key
 function credentialsKey(credentials: Credentials): string {
@@ -49,9 +44,9 @@ function credentialsKey(credentials: Credentials): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
-function* chunked(rows: Row[], built: BuiltSelect): Generator<SourceRow[]> {
+function* chunked(rows: Row[], columns: ProjectedColumn[]): Generator<SourceRow[]> {
   for (let i = 0; i < rows.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
-    yield renderRows(rows.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch), built.columns);
+    yield renderRows(rows.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch), columns);
   }
 }
 
@@ -59,8 +54,8 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
   abstract readonly catalog: Catalog;
   abstract readonly schema: string;
   readonly flavor: SqlFlavor = postgres();
-  // true only when every declared unique/primaryKey is a real db constraint; the honest default is false
-  readonly enforcesDeclaredKeys: boolean = false;
+  // true only when every declared unique/primaryKey is a real db constraint
+  readonly keysEnforced: boolean = false;
   // override when the driver takes separate parts
   readonly credentialSchema: CredentialField[] = [
     {
@@ -76,20 +71,16 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
   readonly #pools = new Map<string, PoolLease<Pool>>();
   #ctx: SqlContext | undefined;
 
-  /**
-   * one tenant's pool from their credentials; opened once per credential set and reused.
-   * throw here and the tenant sees the driver's own message from `/check`.
-   */
+  /** one pool per credential set, reused; a throw here reaches the tenant through `/check`. */
   protected abstract openPool(credentials: Credentials): Promise<Pool>;
 
   /** the driver's own shutdown for a pool the cache evicted. */
   protected abstract closePool(pool: Pool): Promise<void>;
 
-  /** one parameterized statement on that tenant's pool; params bind positionally in flavor.placeholder order, never inside the sql text. */
+  /** one parameterized statement; params bind in flavor.placeholder order, never spliced into the sql. */
   abstract run(pool: Pool, sql: string, params: unknown[]): Promise<Row[]>;
 
-  // cursor seam: a driver with real cursors overrides this to yield raw row batches for the
-  // built statement; left undefined, query pages via limit/offset windows
+  // a driver with real cursors overrides this to yield raw batches; undefined pages via limit/offset
   protected streamBatches?(
     pool: Pool,
     built: { sql: string; params: unknown[] },
@@ -98,7 +89,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
 
   // #region pool cache
 
-  /** the pool stays open while fn holds it; an override that needs the raw pool (a dialect's own `check`) goes through here. */
+  /** the pool stays open while fn holds it; an override needing the raw pool goes through here. */
   protected async withPool<T>(credentials: Credentials, fn: (pool: Pool) => Promise<T>): Promise<T> {
     const lease = await this.#acquire(credentials);
     try {
@@ -108,25 +99,16 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     }
   }
 
-  // map order is lru order: delete+set marks recent
   async #acquire(credentials: Credentials): Promise<PoolLease<Pool>> {
     const key = credentialsKey(credentials);
     const cached = this.#pools.get(key);
-    if (cached) {
-      this.#pools.delete(key);
-      this.#pools.set(key, cached);
-      cached.inFlight++;
-      try {
-        await cached.pool;
-      } catch (error) {
-        this.#release(cached);
-        throw error;
-      }
-      return cached;
-    }
+    const lease = cached ?? { pool: this.openPool(credentials), inFlight: 0, evicted: false };
 
-    const lease: PoolLease<Pool> = { pool: this.openPool(credentials), inFlight: 1, evicted: false };
+    // lru order is map order: delete+set marks recent
+    this.#pools.delete(key);
     this.#pools.set(key, lease);
+    lease.inFlight++;
+
     try {
       await lease.pool;
     } catch (error) {
@@ -135,7 +117,8 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       this.#release(lease);
       throw error;
     }
-    this.#evictOverflow();
+
+    if (!cached) this.#evictOverflow();
     return lease;
   }
 
@@ -158,8 +141,14 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     }
   }
 
-  async #probe<T>(credentials: Credentials, fn: (run: probes.SqlRunner) => Promise<T>): Promise<T> {
-    return await this.withPool(credentials, (pool) => fn((sql, params) => this.run(pool, sql, params)));
+  async #withRunner<T>(
+    credentials: Credentials,
+    fn: (run: measure.SqlRunner) => Promise<T>,
+  ): Promise<T> {
+    return await this.withPool(credentials, async (pool) => {
+      const run: measure.SqlRunner = (sql, params) => this.run(pool, sql, params);
+      return await fn(run);
+    });
   }
 
   // #endregion
@@ -169,14 +158,14 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       catalog: this.catalog,
       schema: this.schema,
       flavor: this.flavor,
-      operators: new Set(this.capability().capabilities.operators),
+      operators: new Set(this.capabilities().capabilities.operators),
     };
     return this.#ctx;
   }
 
   // #region protocol
 
-  override capability(): AtlasJson {
+  override capabilities(): CapabilityDoc {
     return sqlCapability(this);
   }
 
@@ -185,13 +174,15 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     await this.withPool(req.credentials, (pool) => this.run(pool, "SELECT 1", []));
   }
 
-  override async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    return await this.#probe(req.credentials, (run) => discovery(this.ctx, run));
+  override async discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+    return await this.#withRunner(req.credentials, (run) => discovery(this.ctx, run));
   }
 
-  override async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+  // filters, sort and window all run in one statement, so served is true for all three
+  override async *query(req: NativeQueryRequest): AsyncIterable<QueryChunk> {
     const lease = await this.#acquire(req.credentials);
     try {
+      yield { served: { filters: true, sort: true, window: true } };
       yield* this.#queryPool(await lease.pool, req);
     } finally {
       this.#release(lease);
@@ -202,19 +193,21 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
     if (this.streamBatches) {
       const built = buildSelect(this.ctx, req);
       for await (const batch of this.streamBatches(pool, built, req)) {
-        yield* chunked(batch, built);
+        yield* chunked(batch, built.columns);
       }
       return;
     }
 
     const base = requireTable(this.ctx, req.table);
+
+    // nothing to page by, so one statement is the whole answer
     if (req.sort.length === 0 && base.primaryKey.length === 0) {
       const built = buildSelect(this.ctx, req);
-      yield* chunked(await this.run(pool, built.sql, built.params), built);
+      yield* chunked(await this.run(pool, built.sql, built.params), built.columns);
       return;
     }
 
-    // limit/offset pages need a total order; the primary key tiebreaks whatever the caller sorted by
+    // limit/offset pages need a total order; the primary key tiebreaks the caller's sort
     const tiebreak = base.primaryKey
       .filter((field) => !req.sort.some((sort) => sort.field === field))
       .map((field) => ({ field, dir: "asc" as const }));
@@ -225,7 +218,7 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
       const limit = Math.min(CONNECTOR_LIMITS.rowsPerBatch, remaining);
       const page = buildSelect(this.ctx, { ...req, sort, limit, offset });
       const rows = await this.run(pool, page.sql, page.params);
-      if (rows.length > 0) yield renderRows(rows, page.columns);
+      yield* chunked(rows, page.columns);
       remaining -= rows.length;
       offset += rows.length;
       if (rows.length < limit) return;
@@ -234,38 +227,29 @@ export abstract class SqlConnector<Pool = unknown> extends AtlasConnector {
 
   override async count(req: CountRequest): Promise<number> {
     const built = buildCount(this.ctx, req);
-    return await this.withPool(req.credentials, async (pool) =>
-      Number(probes.firstRow(await this.run(pool, built.sql, built.params)).count),
+    return await this.#withRunner(req.credentials, async (run) =>
+      Number(measure.firstRow(await run(built.sql, built.params)).count),
     );
   }
 
-  // COUNT(*) is exact, so never null
-  override async exactCount(req: CountExactRequest): Promise<number> {
-    return await this.#probe(req.credentials, (run) => probes.countExact(this.ctx, run, req));
+  override async size(req: SizeRequest): Promise<EntitySize> {
+    return await this.#withRunner(req.credentials, (run) => measure.size(this.ctx, run, req));
   }
 
-  override async sampleColumnValues(req: SampleKeyValuesRequest): Promise<string[]> {
-    return await this.#probe(req.credentials, (run) => probes.sampleKeyValues(this.ctx, run, req));
+  override async cardinality(req: CardinalityRequest): Promise<TableCardinality> {
+    return await this.#withRunner(req.credentials, (run) => measure.cardinality(this.ctx, run, req));
   }
 
-  override async profileColumns(req: ProbeColumnsRequest): Promise<TableColumnsProbe> {
-    return await this.#probe(req.credentials, (run) => probes.probeColumns(this.ctx, run, req));
+  override async linkHitRate(req: LinkHitRateRequest): Promise<LinkHitRate> {
+    return await this.#withRunner(req.credentials, (run) => measure.linkHitRate(this.ctx, run, req));
   }
 
-  override async profileLink(req: ProbeLinkRequest): Promise<LinkProbe> {
-    return await this.#probe(req.credentials, (run) => probes.probeLink(this.ctx, run, req));
-  }
-
-  override async profileGrain(req: ProbeGrainRequest): Promise<GrainProbe> {
-    return await this.#probe(req.credentials, (run) => probes.probeGrain(this.ctx, run, req));
-  }
-
-  // a null build declines the whole aggregate; undefined crosses serve() as a 204, never as rows
+  // buildAggregate returns null to decline; undefined becomes serve()'s 204, never rows
   override async aggregate(req: AggregateRequest): Promise<SourceRow[] | undefined> {
     const built = buildAggregate(this.ctx, req, req.limit);
     if (!built) return undefined;
-    return await this.withPool(req.credentials, async (pool) =>
-      renderAggregateRows(await this.run(pool, built.sql, built.params), built.columns),
+    return await this.#withRunner(req.credentials, async (run) =>
+      renderAggregateRows(await run(built.sql, built.params), built.columns),
     );
   }
 

@@ -1,13 +1,19 @@
-// in-memory twin of the sql where-builder: the same Filter set over the same rows must
-// accept and reject identically whether a connector pushes SQL or filters fetched rows
+// in-memory twin of the sql where-builder: one Filter set, same accept and reject verdicts
 
 import type { AtlasType, Filter, SourceRow } from "../wire/vocabulary";
 
-// utf-8 byte order == code point order; plain string < compares utf-16 units and misorders astral chars
+// plain decimal text only; the wire crosses numbers digit-exact, never in exponent notation
+const DECIMAL_TEXT = /^([+-]?)(\d+)(?:\.(\d+))?$/;
+
+const plainDigits = new Intl.NumberFormat("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
+
+type Decimal = { negative: boolean; int: string; frac: string };
+
+/** compares by utf-8 byte order; plain `<` compares utf-16 units and misorders astral chars. */
 export function byteOrderCompare(a: string, b: string): number {
   let i = 0;
   while (i < a.length && i < b.length) {
-    // SAFETY: i < length, so a code point exists at i
+    // i < length, so a code point exists at i
     const ca = a.codePointAt(i) as number;
     const cb = b.codePointAt(i) as number;
     if (ca !== cb) return ca < cb ? -1 : 1;
@@ -17,15 +23,10 @@ export function byteOrderCompare(a: string, b: string): number {
   return a.length < b.length ? -1 : 1;
 }
 
-type Decimal = { negative: boolean; int: string; frac: string };
-
-// plain decimal text only; the wire crosses numbers digit-exact, never in exponent notation
-const DECIMAL_TEXT = /^([+-]?)(\d+)(?:\.(\d+))?$/;
-
 function parseDecimal(text: string): Decimal | null {
   const match = DECIMAL_TEXT.exec(text);
   if (!match) return null;
-  // SAFETY: group 2 always captures on a match
+  // group 2 always captures on a match
   const int = (match[2] as string).replace(/^0+(?=\d)/, "");
   const frac = (match[3] ?? "").replace(/0+$/, "");
   // "-0" and "-0.00" are zero, and zero has no sign
@@ -33,7 +34,7 @@ function parseDecimal(text: string): Decimal | null {
   return { negative, int, frac };
 }
 
-// digit-exact, so >2^53 twins stay distinct where a double would fold them
+/** digit-exact ordering, so >2^53 twins stay distinct where a double would fold them. */
 export function decimalCompare(a: string, b: string): number | null {
   const left = parseDecimal(a);
   const right = parseDecimal(b);
@@ -45,26 +46,23 @@ export function decimalCompare(a: string, b: string): number | null {
   }
   if (left.int !== right.int) return (left.int < right.int ? -1 : 1) * flip;
   if (left.frac === right.frac) return 0;
-  // trailing zeros are stripped, so digit-wise order with prefix-is-smaller is exact
+  // trailing zeros are stripped, so prefix-is-smaller is exact
   return (left.frac < right.frac ? -1 : 1) * flip;
 }
 
-const decimalFormat = new Intl.NumberFormat("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
-
-// null on either side is sql UNKNOWN: no comparator matches, mirroring `col = NULL`.
-// number/decimal columns compare digit-exact; every other declared type compares as bytes;
-// an undeclared column compares digit-exact only when both sides spell a plain decimal.
+// null on either side is sql UNKNOWN: nothing matches, like `col = NULL`
 function compareValues(value: unknown, bound: unknown, type: AtlasType | undefined): number | null {
   if (value == null || bound == null) return null;
   const left = String(value);
   const right = String(bound);
+  // String() gives exponent notation past 1e21, which DECIMAL_TEXT rejects
   if (type === "number" || type === "decimal") {
-    // Native doubles may stringify with exponents; decimal strings stay digit-exact.
     return decimalCompare(
-      typeof value === "number" ? decimalFormat.format(value) : left,
-      typeof bound === "number" ? decimalFormat.format(bound) : right,
+      typeof value === "number" ? plainDigits.format(value) : left,
+      typeof bound === "number" ? plainDigits.format(bound) : right,
     );
   }
+  // an undeclared column is digit-exact only when both sides spell a plain decimal
   if (type === undefined) return decimalCompare(left, right) ?? byteOrderCompare(left, right);
   return byteOrderCompare(left, right);
 }
@@ -106,13 +104,13 @@ function matchesFilter(row: SourceRow, filter: Filter, fieldTypes: Record<string
       if (filter.op === "lt") return order < 0;
       return order <= 0;
     }
-    // a null member is never-match on both sides of the set ops; an empty `in` matches nothing
+    // a null member never matches, and an empty `in` matches nothing
     case "in":
       return value !== null && filter.values.some((member) => member !== null && equalsValue(value, member, type));
     // nin keeps null rows, and an empty set excludes nothing
     case "nin":
       return value === null || !filter.values.some((member) => member !== null && equalsValue(value, member, type));
-    // the sql side runs LIKE over col::text, so both ops stringify the cell first
+    // the sql side LIKEs col::text, so both ops stringify the cell first
     case "includes":
       return value !== null && filter.value !== null && String(value).includes(String(filter.value));
     case "startswith":
@@ -130,7 +128,7 @@ function matchesFilter(row: SourceRow, filter: Filter, fieldTypes: Record<string
   }
 }
 
-// and[] conjoined, or[][] as DNF, the whole or-block one further conjunct — the buildWhere law
+/** and[] conjoined, or[][] as DNF, the whole or-block one further conjunct. */
 export function applyFilters(
   rows: SourceRow[],
   filters: { and: Filter[]; or?: Filter[][] },

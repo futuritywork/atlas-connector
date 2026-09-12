@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { AtlasConnector } from "../connector";
-import type { AtlasJson } from "../wire/atlas-json";
-import type { DiscoveryAnswer } from "../wire/schemas";
+import type { AtlasJson, CapabilityDoc } from "../wire/atlas-json";
+import type { DiscoveryAnswer, EntitySize } from "../wire/schemas";
 import type { SourceRow } from "../wire/vocabulary";
 import { createApp, serve } from "./serve";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 
-function doc(overrides: Partial<AtlasJson> = {}): AtlasJson {
+function doc(overrides: Partial<CapabilityDoc> = {}): CapabilityDoc {
   return {
     protocolVersion: 1,
     slug: "boot-test",
@@ -16,31 +16,34 @@ function doc(overrides: Partial<AtlasJson> = {}): AtlasJson {
       dateBucket: false,
       sort: "none",
       offset: false,
-      count: "server",
       join: false,
-      enforcesDeclaredKeys: false,
-      probeConcurrency: 4,
-      cheapProbes: false,
+      keysEnforced: false,
+      limits: { concurrency: 1 },
     },
     credentialSchema: [],
-    endpoints: [],
     ...overrides,
   };
 }
 
 class BootTestConnector extends AtlasConnector {
   readonly slug = "boot-test";
-  constructor(private readonly served: AtlasJson = doc()) {
+  constructor(private readonly served: CapabilityDoc = doc()) {
     super();
   }
-  capability(): AtlasJson {
+  capabilities(): CapabilityDoc {
     return this.served;
   }
   async check(): Promise<void> {}
-  async discover(): Promise<DiscoveryAnswer> {
+  async discovery(): Promise<DiscoveryAnswer> {
     return { tables: [] };
   }
   async *query(): AsyncIterable<SourceRow[]> {}
+}
+
+async function servedDoc(connector: AtlasConnector): Promise<AtlasJson> {
+  const app = createApp(connector, { token: TOKEN });
+  const response = await app.handle(new Request("http://connector.test/.well-known/futurity/atlas.json"));
+  return (await response.json()) as AtlasJson;
 }
 
 describe("createApp boot checks", () => {
@@ -51,6 +54,16 @@ describe("createApp boot checks", () => {
   test("a capability doc that does not parse fails boot", () => {
     const broken = new BootTestConnector(doc({ slug: "NOT A SLUG" }));
     expect(() => createApp(broken, { token: TOKEN })).toThrow("capability document");
+  });
+
+  test("endpoints come from the overridden methods, never from the author", async () => {
+    class Sized extends BootTestConnector {
+      override async size(): Promise<EntitySize> {
+        return { rows: 0, exact: true };
+      }
+    }
+    expect((await servedDoc(new BootTestConnector())).endpoints).toEqual([]);
+    expect((await servedDoc(new Sized())).endpoints).toEqual(["size"]);
   });
 });
 

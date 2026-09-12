@@ -1,188 +1,93 @@
-// the server dual of Atlas's SourceClient: the protocol methods over parsed wire requests.
-// serve() owns auth, body parse, timeouts, ndjson framing and the error envelope; a method gets the parsed request, credentials and deadline included.
-
-import { columnCountsFromValues, grainFromValues, linkFromValues, sampleFromValues } from "./kit/probe-math";
-import type { AtlasJson } from "./wire/atlas-json";
+import type { CapabilityDoc } from "./wire/atlas-json";
+import { CONNECTOR_LIMITS } from "./wire/limits";
 import type {
   AggregateRequest,
+  CardinalityRequest,
   CheckRequest,
-  CountExactRequest,
   CountRequest,
-  Credentials,
   DiscoveryAnswer,
   DiscoveryRequest,
-  GrainProbe,
-  LinkProbe,
+  EntitySize,
+  LinkHitRate,
+  LinkHitRateRequest,
   NativeQueryRequest,
-  ProbeColumnsRequest,
-  ProbeGrainRequest,
-  ProbeLinkRequest,
-  SampleKeyValuesRequest,
-  TableColumnsProbe,
+  Served,
+  SizeRequest,
+  TableCardinality,
 } from "./wire/schemas";
 import type { SourceRow } from "./wire/vocabulary";
-import { CONNECTOR_LIMITS } from "./wire/limits";
 
-// Window already-filtered (and, when requested, sorted) rows; early return closes the source iterator.
+/** one batch of rows, or the plan line that precedes them all. */
+export type QueryChunk = SourceRow[] | { served: Served };
+
+/** announces nothing: the rows are a superset the host filters, sorts and windows itself. */
+export const SERVED_NOTHING: Served = { filters: false, sort: false, window: false };
+
+/** applies offset and limit to already-filtered batches; an early return closes the source iterator. */
 export async function* windowRows(
   batches: AsyncIterable<SourceRow[]> | Iterable<SourceRow[]>,
   request: Pick<NativeQueryRequest, "offset" | "limit">,
 ): AsyncIterable<SourceRow[]> {
   let offset = request.offset ?? 0;
   let remaining = request.limit ?? Number.POSITIVE_INFINITY;
+
   for await (const batch of batches) {
     const start = Math.min(offset, batch.length);
-    offset -= start;
     const end = Math.min(batch.length, start + remaining);
-    for (let index = start; index < end; index += CONNECTOR_LIMITS.rowsPerBatch) {
-      yield batch.slice(index, Math.min(index + CONNECTOR_LIMITS.rowsPerBatch, end));
+    offset -= start;
+
+    // an in-window batch that already fits one line goes out uncopied
+    const wholeBatchFits = start === 0 && end === batch.length && end <= CONNECTOR_LIMITS.rowsPerBatch;
+    if (wholeBatchFits) {
+      if (batch.length > 0) yield batch;
+    } else {
+      for (let index = start; index < end; index += CONNECTOR_LIMITS.rowsPerBatch) {
+        yield batch.slice(index, Math.min(index + CONNECTOR_LIMITS.rowsPerBatch, end));
+      }
     }
+
     remaining -= end - start;
     if (remaining === 0) return;
   }
 }
 
-// returning mid-iteration ends the for-await, so the producer's cursor closes at the limit
-export async function drainRows(
-  batches: AsyncIterable<SourceRow[]>,
-  limit?: number,
-): Promise<SourceRow[]> {
-  const rows: SourceRow[] = [];
-  for await (const batch of batches) {
-    for (const row of batch) rows.push(row);
-    if (limit !== undefined && rows.length >= limit) return rows.slice(0, limit);
-  }
-  return rows;
-}
-
+/** the class a connector extends; serve() adds auth, parsing, deadlines and the error envelope. */
 export abstract class AtlasConnector {
-  // #region identity
+  // #region required
 
-  /** stable id, `^[a-z][a-z0-9-]{2,39}$`; the same value the capability doc carries as slug. */
+  /** stable id, `^[a-z][a-z0-9-]{2,39}$`, the same value the capability doc carries. */
   abstract readonly slug: string;
 
-  /**
-   * fetched unauthenticated at connect and at every discovery: which pushdowns Atlas may use and which credentials the tenant is asked for; build it from constants.
-   * give every credentialSchema entry a `placeholder` and a `help` string, short markdown naming the vendor console page the value is found on and linking its doc.
-   */
-  abstract capability(): AtlasJson;
+  /** the pushdowns and the credentials to ask for, fetched unauthenticated; see defineCapability. */
+  abstract capabilities(): CapabilityDoc;
 
-  /** the cheapest upstream call that proves req.credentials; the thrown message reaches the tenant verbatim. */
+  /** the cheapest upstream call that proves req.credentials; the thrown message reaches the tenant. */
   abstract check(req: CheckRequest): Promise<void>;
 
-  // #endregion
+  /** yield `{ served }` before the first batch; `assertKnownFields` 422s a field you cannot answer. */
+  abstract query(req: NativeQueryRequest): AsyncIterable<QueryChunk>;
 
-  // #region query
-
-  /**
-   * every row Atlas reads crosses here: `/query` drains it to the request's limit, `/query/stream` frames the batches as ndjson.
-   * honor every advertised filter and 422 on a field you cannot push down (`assertKnownFields`): an unfiltered row reads as a matching row.
-   */
-  abstract query(req: NativeQueryRequest): AsyncIterable<SourceRow[]>;
-
-  /**
-   * COUNT(*) of the same filtered request; Atlas paginates and sizes previews with it.
-   * an unknown filter field must 422 here too, never widen the count.
-   * The default scans query() with no projected fields; override only for a cheaper source-side count.
-   */
-  async count(req: CountRequest): Promise<number> {
-    let count = 0;
-    const { table, and, or, fieldTypes, credentials, timeoutMs } = req;
-    for await (const batch of this.query({ table, and, or, fieldTypes, credentials, timeoutMs, fields: [], sort: [] })) {
-      count += batch.length;
-    }
-    return count;
-  }
-
-  /**
-   * group-by pushdown Atlas tries before folding rows itself; advertise it in `endpoints`.
-   * the default declines with undefined (a 204); override only where the source groups server-side.
-   */
-  async aggregate(_req: AggregateRequest): Promise<SourceRow[] | undefined> {
-    return undefined;
-  }
+  /** the tables, fields and keys a source is built from; slow is fine, it runs at setup and rediscovery. */
+  abstract discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer>;
 
   // #endregion
 
-  // #region discovery
+  // #region optional measurement
 
-  /** the tables, fields and keys Atlas builds a source from; called at setup and on rediscovery, so it may be slow. */
-  abstract discover(req: DiscoveryRequest): Promise<DiscoveryAnswer>;
+  /** the whole table's row count from upstream metadata; `exact: false` when estimated, null when absent. */
+  size?(req: SizeRequest): Promise<EntitySize | null>;
 
-  // #endregion
+  /** rows matching the filtered request; an unknown filter field 422s here too, never widens the count. */
+  count?(req: CountRequest): Promise<number>;
 
-  // #region profiling
+  /** group-by pushdown; undefined declines this one aggregate and Atlas folds the rows itself. */
+  aggregate?(req: AggregateRequest): Promise<SourceRow[] | undefined>;
 
-  #scan(
-    req: { credentials: Credentials; timeoutMs: number },
-    table: string,
-    fields: string[],
-  ): AsyncIterable<SourceRow[]> {
-    return this.query({
-      table,
-      and: [],
-      sort: [],
-      fields,
-      credentials: req.credentials,
-      timeoutMs: req.timeoutMs,
-    });
-  }
+  /** per-column non-null and distinct counts from source-side COUNT / COUNT DISTINCT; null when it cannot. */
+  cardinality?(req: CardinalityRequest): Promise<TableCardinality>;
 
-  /**
-   * per-column non-null and distinct counts; Atlas picks join keys off them, so a wrong count mispicks joins.
-   * the default scans the table through `query`; override with source-side COUNT DISTINCT, or answer null to decline.
-   */
-  async profileColumns(req: ProbeColumnsRequest): Promise<TableColumnsProbe | null> {
-    const rows = await drainRows(this.#scan(req, req.table, req.columns));
-    const columns: Record<string, unknown[]> = {};
-    for (const name of req.columns) columns[name] = rows.map((row) => row[name] ?? null);
-    return columnCountsFromValues(columns);
-  }
-
-  /**
-   * orphan rate of one candidate foreign key; Atlas keeps or drops the join hop on it.
-   * the default scans both columns through `query`; override with a source-side LEFT JOIN, or answer null to decline.
-   */
-  async profileLink(req: ProbeLinkRequest): Promise<LinkProbe | null> {
-    const from = await drainRows(this.#scan(req, req.fromTable, [req.fromColumn]));
-    const to = await drainRows(this.#scan(req, req.toTable, [req.toColumn]));
-    return linkFromValues(
-      from.map((row) => row[req.fromColumn] ?? null),
-      to.map((row) => row[req.toColumn] ?? null),
-    );
-  }
-
-  /**
-   * rows, non-nulls and distincts for one column; Atlas reads a table's grain from it.
-   * the default scans the column through `query`; override with source-side counts, or answer null to decline.
-   */
-  async profileGrain(req: ProbeGrainRequest): Promise<GrainProbe | null> {
-    const rows = await drainRows(this.#scan(req, req.table, [req.column]));
-    return grainFromValues(rows.map((row) => row[req.column] ?? null));
-  }
-
-  /**
-   * the table's exact row count, for the places an estimate would corrupt Atlas's math.
-   * the default is a full scan through `query` with no columns; override for a cheap exact count, answer null when the source only estimates.
-   */
-  async exactCount(req: CountExactRequest): Promise<number | null> {
-    let count = 0;
-    for await (const batch of this.#scan(req, req.table, [])) count += batch.length;
-    return count;
-  }
-
-  /**
-   * the sorted distinct head of one column as text; Atlas matches keys across sources with it.
-   * the default scans the column through `query` and sorts in memory; override with ORDER BY … LIMIT to read only the head.
-   */
-  async sampleColumnValues(req: SampleKeyValuesRequest): Promise<string[]> {
-    const rows = await drainRows(this.#scan(req, req.table, [req.column]));
-    return sampleFromValues(
-      rows.map((row) => row[req.column] ?? null),
-      req.type,
-      req.limit,
-    );
-  }
+  /** orphan rate of one candidate foreign key, from a source-side LEFT JOIN. */
+  linkHitRate?(req: LinkHitRateRequest): Promise<LinkHitRate>;
 
   // #endregion
 }
