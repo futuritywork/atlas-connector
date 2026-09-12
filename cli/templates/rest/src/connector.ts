@@ -2,60 +2,88 @@ import {
   applyFilters,
   assertKnownFields,
   AtlasConnector,
+  defineCatalog,
+  discoverFields,
+  field,
+  fieldTypes,
+  pushedOps,
   unknownEntity,
   type CheckRequest,
-  type CountRequest,
   type DiscoveryAnswer,
   type DiscoveryRequest,
+  type EntitySize,
   type NativeQueryRequest,
-  type SourceRow,
+  type QueryChunk,
+  type SizeRequest,
 } from "@futurity/atlas-connector";
-import { ATLAS_JSON } from "./capability";
+import { ATLAS_JSON, PUSHDOWN } from "./capability";
 
-// YOUR CODE HERE: the fields your api exposes per table. discovery answers from the same
-// place, so "a field Atlas may filter on" and "a field you declared" stay the same set.
-const FIELDS: Record<string, string[]> = {
-  companies: ["id", "name", "created_at"],
-};
+// YOUR CODE HERE: the fields your api exposes per table; discovery answers from this same catalog
+const catalog = defineCatalog([
+  {
+    name: "companies",
+    description: "Companies exposed by your API",
+    primaryKey: ["id"],
+    columns: [
+      field("id", "string", { unique: true }),
+      field("name", "string"),
+      field("created_at", "datetime"),
+    ],
+  },
+]);
 
-function fieldsOf(table: string): string[] {
-  const fields = FIELDS[table];
-  if (!fields) throw unknownEntity(`unknown table "${table}"`);
-  return fields;
+function tableOf(name: string) {
+  const table = catalog.getTable(name);
+  if (!table) throw unknownEntity(`unknown table "${name}"`);
+  return table;
 }
 
 export class MyConnector extends AtlasConnector {
   readonly slug = "my-atlas-connector";
 
-  capability() {
+  capabilities() {
     return ATLAS_JSON;
   }
 
-  // YOUR CODE HERE: the cheapest upstream call that proves req.credentials: a token mint,
-  // a whoami, a 1-row read. throw with a message written for the tenant: they see it verbatim.
+  // YOUR CODE HERE: the cheapest call that proves req.credentials, a token mint or a whoami
+  // the tenant reads your thrown message verbatim
   async check(req: CheckRequest): Promise<void> {
     throw new Error("implement check");
   }
 
-  // YOUR CODE HERE: fetch rows for req.credentials; push what your api can filter, applyFilters()
-  // the rest; project req.fields; honor sort/limit/offset; yield batches of ≤5000 rows.
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
-    // a filter you cannot answer must 422 HERE: a row that skipped a filter reads as a row that matched it
-    assertKnownFields(req, fieldsOf(req.table));
+  // YOUR CODE HERE: fetch rows for req.credentials, project req.fields, honor sort/limit/offset
+  // push what PUSHDOWN promises and applyFilters the rest; yield batches of at most 5000 rows
+  async *query(req: NativeQueryRequest): AsyncIterable<QueryChunk> {
+    const types = fieldTypes(tableOf(req.table).columns);
+    // 422 before the first fetch: a row that skipped a filter reads as one that matched
+    assertKnownFields(req, Object.keys(types));
+    // what the upstream applied, before the first batch; anything false is the host's to redo
+    yield { served: { filters: false, sort: false, window: false } };
+    // pushedOps(PUSHDOWN, req.table, filter.field) decides upstream param vs residual applyFilters
     throw new Error("implement query");
   }
 
-  // YOUR CODE HERE: how many rows match req.and/req.or (your count endpoint, or tally query()).
-  async count(req: CountRequest): Promise<number> {
-    assertKnownFields(req, fieldsOf(req.table));
-    throw new Error("implement count");
+  // YOUR CODE HERE: the table's total from your api's own metadata (totalResults, result.count)
+  // exact: false for an estimate, null when there is none; Atlas then scans to its cap to size it
+  override async size(req: SizeRequest): Promise<EntitySize | null> {
+    tableOf(req.table); // 404 on a table you do not have, before answering null
+    return null;
   }
 
-  // YOUR CODE HERE: map your api's metadata to tables/fields. return { tables, warnings? }.
-  async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
-    throw new Error("implement discover");
+  // YOUR CODE HERE: answer { tables, warnings? }; a dynamic api fetches its metadata per tenant first
+  async discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+    return {
+      tables: catalog.tables.map((table) => ({
+        name: table.name,
+        sourceDescription: table.description,
+        storesRows: true, // false only for an endpoint that computes instead of storing rows
+        primaryKey: table.primaryKey,
+        foreignKeys: [], // [] says this table has no join edges, not that you have not looked
+        fields: discoverFields(table.columns),
+      })),
+    };
   }
 
-  // profileColumns, profileLink, profileGrain, exactCount, and sampleColumnValues already answer
-  // by scanning through query(); override one only where your api can do that math cheaper.
+  // count, aggregate, cardinality and linkHitRate have no default: write one where your api does the math
+  // the one you write becomes a served route and a listed endpoint; left out, Atlas measures it itself
 }

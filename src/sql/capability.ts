@@ -1,41 +1,36 @@
-// derived atlas.json: the builders provably render everything advertised here, so the
-// doc cannot promise an op the flavor and catalog cannot spell
-
-import type { AtlasJson, CredentialField } from "../wire/atlas-json";
-import { type Op, OPS } from "../wire/vocabulary";
+import { defineCapability, type Pushdown } from "../kit/pushdown";
+import type { CapabilityDoc, ConnectorLimits, CredentialField } from "../wire/atlas-json";
+import { OPS } from "../wire/vocabulary";
 import type { Catalog } from "./catalog";
 import type { SqlFlavor } from "./flavor";
 
+const SQL_LIMITS: ConnectorLimits = { concurrency: 4 };
+
+// only the ops this flavor and catalog can actually spell
+function sqlPushdown(catalog: Catalog, flavor: SqlFlavor): Pushdown {
+  const hasArrayColumn = catalog.tables.some((table) =>
+    table.columns.some((column) => column.wire === "text_array"),
+  );
+  const containsRenderable = flavor.arrayContains !== undefined && hasArrayColumn;
+  const ops = OPS.filter((op) => op !== "contains" || containsRenderable);
+  return { ops, sort: "multi", offset: true, join: true };
+}
+
+/** the doc a sql connector serves; its operator set is derived from the flavor, never authored. */
 export function sqlCapability(opts: {
   slug: string;
   catalog: Catalog;
   flavor: SqlFlavor;
-  enforcesDeclaredKeys: boolean;
+  keysEnforced: boolean;
   credentialSchema: CredentialField[];
-  overrides?: Partial<AtlasJson["capabilities"]>;
-}): AtlasJson {
-  const hasArrayColumn = opts.catalog.tables.some((table) =>
-    table.columns.some((column) => column.wire === "text_array"),
-  );
-  // `contains` is real array membership; without a spelling and a column it is a lie
-  const containsRenderable = opts.flavor.arrayContains !== undefined && hasArrayColumn;
-  const operators: Op[] = OPS.filter((op) => op !== "contains" || containsRenderable);
-  return {
-    protocolVersion: 1,
+  limits?: Partial<ConnectorLimits>;
+}): CapabilityDoc {
+  return defineCapability({
     slug: opts.slug,
-    capabilities: {
-      operators,
-      dateBucket: true,
-      sort: "multi",
-      offset: true,
-      count: "server",
-      join: true,
-      enforcesDeclaredKeys: opts.enforcesDeclaredKeys,
-      probeConcurrency: 4,
-      cheapProbes: false,
-      ...opts.overrides,
-    },
+    pushdown: sqlPushdown(opts.catalog, opts.flavor),
+    limits: { ...SQL_LIMITS, ...opts.limits },
+    keysEnforced: opts.keysEnforced,
+    dateBucket: true,
     credentialSchema: opts.credentialSchema,
-    endpoints: ["aggregate"],
-  };
+  });
 }

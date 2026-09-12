@@ -18,14 +18,14 @@ deployment serves many databases and stores none of them.
    interpolate them into the sql text.
 
 That is the whole connector. `check` is a `SELECT 1` on the tenant's pool.
-Discovery, queries, streaming, counts, probes, and aggregates are all built from
-those pieces, and the served capability doc is derived from the catalog: an op
-the builders can't render is never advertised. To narrow it further, override
-`capability()`:
+Discovery, streaming queries, `size`, `count`, `cardinality`, `linkHitRate` and
+aggregates are all built from those pieces, and the served capability doc is
+derived from the catalog: an op the builders can't render is never advertised.
+To narrow it further, override `capabilities()`:
 
 ```ts
-override capability() {
-  const doc = super.capability();
+override capabilities() {
+  const doc = super.capabilities();
   return { ...doc, capabilities: { ...doc.capabilities, join: false } };
 }
 ```

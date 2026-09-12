@@ -1,8 +1,8 @@
-// bitable field-type codes → atlas types, plus the read-side value flattening.
-// a record's fields map omits empty cells entirely, so a missing key reads as null.
-
 import type { AtlasType, AtlasValue } from "@futurity/atlas-connector";
+import { z } from "zod";
 import type { LarkField } from "./lark-api";
+
+export const RECORD_ID = "record_id"; // every record carries it; no table declares it as a field
 
 export const LARK_TYPE = {
   text: 1,
@@ -28,7 +28,7 @@ export const LARK_TYPE = {
   autoNumber: 1005,
 } as const;
 
-// no decimal or date: bitable numbers are doubles and dates are epoch-ms instants
+// no decimal or date: bitable numbers are doubles, dates epoch-ms instants
 const ATLAS_TYPE_BY_LARK: Record<number, AtlasType> = {
   [LARK_TYPE.text]: "string",
   [LARK_TYPE.number]: "number",
@@ -57,18 +57,30 @@ export function atlasTypeOf(field: LarkField): AtlasType {
   return ATLAS_TYPE_BY_LARK[field.type] ?? "json";
 }
 
-// [{text,type,...}] segment arrays (text, barcode, some formula results) → one string
+// text, barcode and some formula cells arrive as [{ text, type }] segments
+const Segments = z.array(z.union([z.string(), z.object({ text: z.unknown() })]));
+
+// a link cell is { link_record_ids } from a search and [{ record_ids }] from a single-record read
+const SearchedLink = z.object({ link_record_ids: z.array(z.string()) });
+const ReadLink = z.tuple([z.object({ record_ids: z.array(z.string()) })]).rest(z.unknown());
+const BareIds = z.array(z.string());
+
+// formula and lookup cells read as { type, value }
+const Wrapped = z.object({ value: z.unknown() });
+
 function joinSegments(value: unknown): string | null {
   if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return null;
-  const parts: string[] = [];
-  for (const segment of value) {
-    if (typeof segment === "string") parts.push(segment);
-    else if (segment && typeof segment === "object" && "text" in segment) {
-      parts.push(String((segment as { text: unknown }).text ?? ""));
-    } else return null;
-  }
-  return parts.join("");
+  const segments = Segments.safeParse(value);
+  if (!segments.success) return null;
+  return segments.data.map((segment) => (typeof segment === "string" ? segment : String(segment.text ?? ""))).join("");
+}
+
+function linkRecordIds(raw: unknown): string[] {
+  const searched = SearchedLink.safeParse(raw);
+  if (searched.success) return searched.data.link_record_ids;
+  const read = ReadLink.safeParse(raw);
+  if (read.success) return read.data[0].record_ids;
+  return BareIds.safeParse(raw).data ?? [];
 }
 
 function millisToIso(value: unknown): string | null {
@@ -77,8 +89,6 @@ function millisToIso(value: unknown): string | null {
   return new Date(millis).toISOString();
 }
 
-// wire rows carry scalars only: strings, numbers, booleans, null.
-// dates cross as ISO-8601 UTC; arrays and objects cross as JSON text.
 export function flattenValue(raw: unknown, larkType: number): AtlasValue {
   if (raw === undefined || raw === null) return null;
   switch (larkType) {
@@ -86,8 +96,13 @@ export function flattenValue(raw: unknown, larkType: number): AtlasValue {
     case LARK_TYPE.phone:
     case LARK_TYPE.autoNumber:
       return joinSegments(raw) ?? String(raw);
-    case LARK_TYPE.number:
-      return typeof raw === "number" && Number.isFinite(raw) ? raw : (joinSegments(raw) ?? String(raw));
+    case LARK_TYPE.number: {
+      if (typeof raw === "number") return Number.isFinite(raw) ? raw : String(raw);
+      // a single-record read spells a number as decimal text
+      const text = joinSegments(raw) ?? String(raw);
+      const parsed = Number(text);
+      return text.trim() !== "" && Number.isFinite(parsed) ? parsed : text;
+    }
     case LARK_TYPE.singleSelect:
       return typeof raw === "string" ? raw : JSON.stringify(raw);
     case LARK_TYPE.multiSelect:
@@ -107,18 +122,13 @@ export function flattenValue(raw: unknown, larkType: number): AtlasValue {
     }
     case LARK_TYPE.singleLink:
     case LARK_TYPE.duplexLink: {
-      // link cells read as { link_record_ids: [...] }; only the first id crosses, as text, so the field joins against record_id
-      const ids = raw && typeof raw === "object" && "link_record_ids" in raw ? raw.link_record_ids : raw;
-      return Array.isArray(ids) && ids.length > 0 ? String(ids[0]) : null;
+      // only the first id crosses, so the field joins against record_id
+      return linkRecordIds(raw)[0] ?? null;
     }
     case LARK_TYPE.formula:
     case LARK_TYPE.lookup: {
-      // reads as { type, value } — keep the value; segment-array values flatten to text
-      if (raw && typeof raw === "object" && "value" in raw) {
-        const inner = (raw as { value: unknown }).value;
-        return joinSegments(inner) ?? JSON.stringify(inner);
-      }
-      return joinSegments(raw) ?? JSON.stringify(raw);
+      const inner = Wrapped.safeParse(raw).data?.value ?? raw;
+      return joinSegments(inner) ?? JSON.stringify(inner);
     }
     default: {
       if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") return raw;

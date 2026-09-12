@@ -1,37 +1,53 @@
+import { type QueryChunk, SERVED_NOTHING } from "../connector";
 import { CONNECTOR_LIMITS } from "../wire/limits";
-import type { StreamLine } from "../wire/schemas";
-import type { SourceRow } from "../wire/vocabulary";
+import type { NativeQueryRequest, Served, StreamLine } from "../wire/schemas";
 import { ConnectorError } from "./errors";
 
-// never leak a raw driver error onto the wire
-function sanitize(error: unknown): string {
-  return error instanceof Error ? (error.message.split("\n")[0] ?? "stream failed") : "stream failed";
+const ENCODER = new TextEncoder();
+
+// a connector error keeps its code; anything else is opaque on the wire, real in the log
+function errorLine(cause: unknown): StreamLine {
+  const connectorError = ConnectorError.fromCause(cause);
+  if (connectorError) return { error: connectorError.body().error };
+  const causeName = cause instanceof Error ? cause.name : "";
+  const cutByOwnDeadline = causeName === "TimeoutError" || causeName === "AbortError";
+  if (cutByOwnDeadline) {
+    return { error: { code: "timeout", message: "the upstream request passed its deadline" } };
+  }
+  console.error("[connector] query stream failed", cause);
+  return { error: { code: "internal", message: "internal error" } };
 }
 
-// a ConnectorError crosses with its own wire code; anything else is an opaque internal
-function errorLine(error: unknown): StreamLine {
-  if (error instanceof ConnectorError) return { error: error.body().error };
-  return { error: { code: "internal", message: sanitize(error) } };
+// a window is the answer only when the filter and the order behind it are served too
+function clampServed(served: Served, request: Pick<NativeQueryRequest, "sort"> | undefined): Served {
+  const sort = served.sort || request?.sort.length === 0; // no order asked for is already in order
+  return { filters: served.filters, sort, window: served.window && served.filters && sort };
 }
 
-// {end:1} is written only after the producer completes, so a truncated stream is distinguishable
-// {error} is terminal with no end
+/** frames a producer's chunks as the wire's ndjson; a terminal {error} replaces the {end:1}. */
 export function ndjsonStream(
-  batches: AsyncIterable<SourceRow[]>,
+  chunks: AsyncIterable<QueryChunk>,
   deadlines: { idleTimeoutMs: number; maxTimeoutMs: number },
+  request?: Pick<NativeQueryRequest, "sort">,
 ): Response {
-  const encoder = new TextEncoder();
-  const iterator = batches[Symbol.asyncIterator]();
+  const iterator = chunks[Symbol.asyncIterator]();
   let closed = false;
 
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       let lastRowsAt = Date.now();
       const write = (line: StreamLine) => {
-        if (!closed) controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+        if (!closed) controller.enqueue(ENCODER.encode(`${JSON.stringify(line)}\n`));
       };
 
-      // heartbeat proves life not progress; fires only when no batch went out in the window
+      let headWritten = false;
+      const writeHead = (served: Served) => {
+        if (headWritten) return;
+        headWritten = true;
+        write({ served: clampServed(served, request) });
+      };
+
+      // proves life not progress; fires only when no batch went out in the window
       const heartbeat = setInterval(() => {
         if (Date.now() - lastRowsAt >= CONNECTOR_LIMITS.heartbeatIntervalMs) write({ ping: 1 });
       }, CONNECTOR_LIMITS.heartbeatIntervalMs);
@@ -51,25 +67,36 @@ export function ndjsonStream(
             abandoned = true;
             break;
           }
+
           let idleTimer: ReturnType<typeof setTimeout> | undefined;
           const idle = new Promise<"idle">((resolve) => {
             idleTimer = setTimeout(() => resolve("idle"), deadlines.idleTimeoutMs);
           });
           const outcome = await Promise.race([iterator.next(), idle]).finally(() => clearTimeout(idleTimer));
+
           if (outcome === "idle") {
             write({ error: { code: "timeout", message: "no rows within idle deadline" } });
             abandoned = true;
             break;
           }
           if (outcome.done) {
+            writeHead(SERVED_NOTHING);
             write({ end: 1 });
             break;
           }
-          const batch = outcome.value;
-          if (batch.length === 0) continue;
-          // the wire caps a line at rowsPerBatch rows; an oversized producer batch is re-chunked
-          for (let i = 0; i < batch.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
-            write({ rows: batch.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch) });
+
+          const chunk = outcome.value;
+          const isPlan = !Array.isArray(chunk);
+          if (isPlan) {
+            writeHead(chunk.served);
+            continue;
+          }
+          writeHead(SERVED_NOTHING);
+          if (chunk.length === 0) continue;
+
+          // the wire caps a line at rowsPerBatch rows
+          for (let i = 0; i < chunk.length; i += CONNECTOR_LIMITS.rowsPerBatch) {
+            write({ rows: chunk.slice(i, i + CONNECTOR_LIMITS.rowsPerBatch) });
           }
           lastRowsAt = Date.now();
         }
@@ -77,12 +104,9 @@ export function ndjsonStream(
         write(errorLine(error));
       } finally {
         clearInterval(heartbeat);
-        // let the producer's finally blocks run (cursors, connections); off-response when abandoned
-        const settle = iterator.return?.();
-        if (settle !== undefined) {
-          if (abandoned) settle.catch(() => {});
-          else await settle.catch(() => {});
-        }
+        // let the producer's finally run (cursors, connections); not awaited when abandoned
+        const settled = iterator.return?.().catch(() => {});
+        if (settled && !abandoned) await settled;
         closed = true;
         try {
           controller.close();

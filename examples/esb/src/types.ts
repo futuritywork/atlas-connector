@@ -1,17 +1,24 @@
-import type { AtlasType } from "@futurity/atlas-connector";
+import type { Field, Op } from "@futurity/atlas-connector";
 
-export type EsbCoreColumn = {
-  name: string;
-  type: AtlasType;
-  nullable: boolean;
-  description: string;
+type EsbFilterParamBase = {
+  field: string;
+  ops: readonly Op[]; // `in` takes a comma-separated set
+  superset?: boolean; // upstream matches wider: a substring, or a day against a datetime
 };
+
+// one param, or a from/to pair
+export type EsbFilterParam =
+  | (EsbFilterParamBase & { param: string })
+  | (EsbFilterParamBase & { from: string; to: string });
 
 export type EsbCoreObject = {
   name: string;
   path: string;
   description: string;
   mode: "paged" | "direct";
+  pageSize?: number; // a latency budget; ESB caps nothing
   primaryKey?: string;
-  columns: EsbCoreColumn[];
+  filters?: EsbFilterParam[]; // drives both the request params and the capability doc
+  sortFields?: string[];
+  columns: Field[];
 };

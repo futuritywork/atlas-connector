@@ -1,9 +1,12 @@
+import { unsupported } from "../serve/errors";
 import type { Filter, Op } from "../wire/vocabulary";
-import { badRequest, unsupported } from "../serve/errors";
 import type { Column, Table } from "./catalog";
 import type { SqlContext, SqlFlavor } from "./flavor";
+import { requireColumn } from "./sql-util";
 
-// accumulates positional binds; the returned placeholder is the only way a value reaches SQL
+const COMPARATORS = { eq: "=", neq: "!=", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const;
+
+/** accumulates positional binds; the returned placeholder is the only way a value reaches sql. */
 export class Binder {
   readonly params: unknown[] = [];
   constructor(private readonly flavor: SqlFlavor) {}
@@ -11,19 +14,6 @@ export class Binder {
     this.params.push(value);
     return this.flavor.placeholder(this.params.length);
   }
-}
-
-// % and _ are LIKE wildcards and the escaping backslash escapes itself
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
-}
-
-function resolveColumn(ctx: SqlContext, table: Table, field: string): Column {
-  const column = ctx.catalog.getColumn(table, field);
-  if (!column) {
-    throw badRequest(`unknown column '${field}' on table '${table.name}'`);
-  }
-  return column;
 }
 
 function assertAdvertised(ctx: SqlContext, op: Op): void {
@@ -41,23 +31,19 @@ function boundParam(ctx: SqlContext, column: Column, value: unknown, binder: Bin
   return binder.bind(value);
 }
 
-function renderComparator(col: string, op: Op, placeholder: string): string {
-  const token: Record<string, string> = {
-    eq: "=",
-    neq: "!=",
-    gt: ">",
-    gte: ">=",
-    lt: "<",
-    lte: "<=",
-  };
-  return `${col} ${token[op]} ${placeholder}`;
+// % and _ are LIKE wildcards and the escaping backslash escapes itself
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function renderLike(ctx: SqlContext, col: string, pattern: string, binder: Binder): string {
+  return `${ctx.flavor.castText(col)} LIKE ${binder.bind(pattern)} ${ctx.flavor.likeEscape}`;
 }
 
 function renderFilter(ctx: SqlContext, table: Table, filter: Filter, binder: Binder): string {
   assertAdvertised(ctx, filter.op);
-  const column = resolveColumn(ctx, table, filter.field);
-  // filters resolve against the base table; t0-qualified so a hop column of the same name
-  // can never make the reference ambiguous
+  const column = requireColumn(table, filter.field);
+  // t0-qualified so a hop column of the same name can never make the reference ambiguous
   const col = `t0.${ctx.flavor.quoteIdent(column.name)}`;
 
   switch (filter.op) {
@@ -67,7 +53,7 @@ function renderFilter(ctx: SqlContext, table: Table, filter: Filter, binder: Bin
     case "gte":
     case "lt":
     case "lte":
-      return renderComparator(col, filter.op, boundParam(ctx, column, filter.value, binder));
+      return `${col} ${COMPARATORS[filter.op]} ${boundParam(ctx, column, filter.value, binder)}`;
     case "in": {
       // an empty set matches nothing; a null-only set already reached here as empty
       if (filter.values.length === 0) return "1 = 0";
@@ -81,11 +67,10 @@ function renderFilter(ctx: SqlContext, table: Table, filter: Filter, binder: Bin
       return `(${col} NOT IN (${placeholders.join(", ")}) OR ${col} IS NULL)`;
     }
     case "includes":
-      return `${ctx.flavor.castText(col)} LIKE ${binder.bind(`%${escapeLike(String(filter.value))}%`)} ${ctx.flavor.likeEscape}`;
+      return renderLike(ctx, col, `%${escapeLike(String(filter.value))}%`, binder);
     case "startswith":
-      return `${ctx.flavor.castText(col)} LIKE ${binder.bind(`${escapeLike(String(filter.value))}%`)} ${ctx.flavor.likeEscape}`;
+      return renderLike(ctx, col, `${escapeLike(String(filter.value))}%`, binder);
     case "contains": {
-      // real array membership — truthful only against a real array column
       if (!ctx.flavor.arrayContains) {
         throw unsupported(`operator 'contains' is not supported by this dialect`);
       }
@@ -101,7 +86,7 @@ function renderFilter(ctx: SqlContext, table: Table, filter: Filter, binder: Bin
   }
 }
 
-// and[] conjoined, or[][] as DNF, the whole block one further conjunct
+/** and[] conjoined, or[][] as DNF, the whole block one further conjunct. */
 export function buildWhere(
   ctx: SqlContext,
   table: Table,

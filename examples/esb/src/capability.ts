@@ -1,19 +1,17 @@
-import { type AtlasJson, OPS } from "@futurity/atlas-connector";
+// the served atlas.json; the SDK fills `endpoints` from this connector's methods
+// pushdown comes from the catalog's param map, so an advertised op is one query() sends
+import { defineCapability, type CapabilityDoc } from "@futurity/atlas-connector";
+import { esbPushdown } from "./helpers/pushdown";
 
-export const ATLAS_JSON: AtlasJson = {
-  protocolVersion: 1,
+export const CAPABILITY: CapabilityDoc = defineCapability({
   slug: "esb-core",
-  capabilities: {
-    operators: OPS.filter((op) => op !== "contains"),
-    dateBucket: false,
-    sort: "multi",
-    offset: true,
-    count: "scan",
-    join: false,
-    enforcesDeclaredKeys: false,
-    probeConcurrency: 4,
-    cheapProbes: false,
+  pushdown: esbPushdown(),
+  limits: {
+    pageSizeMax: 1_000, // this walk's page; ESB caps no limit (limit=100000 answered)
+    concurrency: 4,
   },
+  keysEnforced: false, // a document number is null until ESB authorises the row
+  dateBucket: false,
   credentialSchema: [
     {
       key: "username",
@@ -32,5 +30,4 @@ export const ATLAS_JSON: AtlasJson = {
       help: "The password for the ESB Core API account above. Atlas sends it with connector requests; the connector does not read it from or store it in environment variables.",
     },
   ],
-  endpoints: [],
-};
+});

@@ -1,8 +1,4 @@
-import {
-  timeout,
-  type Credentials,
-  type SourceRow,
-} from "@futurity/atlas-connector";
+import { timeout, withTimeout, type Credentials, type SourceRow } from "@futurity/atlas-connector";
 import {
   describeCollection,
   describeMalformedRows,
@@ -22,7 +18,6 @@ import {
   sanitizeErrorCode,
   tokenCacheKey,
   tokenEntryFor,
-  waitWithinDeadline,
   type Deadline,
   type TokenEntry,
   type TokenState,
@@ -47,38 +42,47 @@ const REFRESH_TTL_MS = 24 * 60 * 60 * 1_000;
 const REFRESH_MARGIN_MS = 5 * 60 * 1_000;
 const AUTH_TIMEOUT_MS = 30_000;
 
-export type EsbCoreFailureKind = "permission" | "authentication";
+type EsbCoreFailureKind = "permission" | "authentication";
 
 type EsbCoreErrorOptions = {
   credentialFailure?: boolean;
   status?: number;
   applicationFailure?: boolean;
   failureKind?: EsbCoreFailureKind;
-  requestToken?: TokenState;
 };
 
-export type EsbCorePage = {
+// requestToken is one more secret publicCode must not echo back
+type EsbErrorContext = EsbCoreErrorOptions & { requestToken?: TokenState };
+
+type EsbCollectionRequest = {
+  page: number;
+  limit: number;
+  params?: Readonly<Record<string, string>>; // ESB ands them together and ignores any it does not know
+  fields?: readonly string[];
+};
+
+type EsbCorePage = {
   rows: SourceRow[];
-  page?: number;
-  limit?: number;
+  count?: number; // across every page, not the rows on this one
   hasNext: boolean;
 };
 
 export class EsbCoreError extends Error {
   readonly code: string;
+  readonly credentialFailure: boolean;
+  readonly status: number | undefined;
+  readonly applicationFailure: boolean;
+  readonly failureKind: EsbCoreFailureKind | undefined;
 
-  constructor(
-    code: string,
-    detail: string,
-    readonly credentialFailure = false,
-    readonly status?: number,
-    readonly applicationFailure = false,
-    readonly failureKind?: EsbCoreFailureKind,
-  ) {
+  constructor(code: string, detail: string, options: EsbCoreErrorOptions = {}) {
     const cleanCode = sanitizeErrorCode(code);
     super(`esb-core: ${cleanCode}: ${detail}`);
     this.name = "EsbCoreError";
     this.code = cleanCode;
+    this.credentialFailure = options.credentialFailure ?? false;
+    this.status = options.status;
+    this.applicationFailure = options.applicationFailure ?? false;
+    this.failureKind = options.failureKind;
   }
 }
 
@@ -102,15 +106,9 @@ export class EsbCoreApi {
     return secrets.some((secret) => secret.includes(sanitized) || sanitized.includes(secret)) ? "unknown" : sanitized;
   }
 
-  private error(code: string, detail: string, options: EsbCoreErrorOptions = {}): EsbCoreError {
-    return new EsbCoreError(
-      this.publicCode(code, options.requestToken),
-      detail,
-      options.credentialFailure ?? false,
-      options.status,
-      options.applicationFailure ?? false,
-      options.failureKind,
-    );
+  // never the raw upstream code when it echoes a secret
+  private error(code: string, detail: string, options: EsbErrorContext = {}): EsbCoreError {
+    return new EsbCoreError(this.publicCode(code, options.requestToken), detail, options);
   }
 
   private async fetchEnvelope(path: string, deadline: Deadline, init: RequestInit): Promise<WireResponse> {
@@ -235,7 +233,8 @@ export class EsbCoreApi {
         },
       );
     }
-    return await waitWithinDeadline(this.entry.pending, deadline);
+    const pending = this.entry.pending;
+    return await withTimeout(deadline.remainingMs(), () => pending);
   }
 
   private invalidate(rejectedAccessToken: string): void {
@@ -250,15 +249,15 @@ export class EsbCoreApi {
 
   private async requestCollection(
     object: EsbCoreObject,
-    page: number,
-    limit: number,
+    request: EsbCollectionRequest,
     deadline: Deadline,
     tokenState: TokenState,
   ): Promise<WireResponse> {
     const search = new URLSearchParams();
     if (object.mode === "paged") {
-      search.set("page", String(page));
-      search.set("limit", String(limit));
+      search.set("page", String(request.page));
+      search.set("limit", String(request.limit));
+      for (const [param, value] of Object.entries(request.params ?? {})) search.set(param, value);
     }
     const suffix = search.size > 0 ? `?${search}` : "";
     return await this.fetchEnvelope(`${object.path}${suffix}`, deadline, {
@@ -273,15 +272,13 @@ export class EsbCoreApi {
 
   async collection(
     object: EsbCoreObject,
-    page: number,
-    limit: number,
+    request: EsbCollectionRequest,
     deadline: Deadline,
-    fields?: readonly string[],
   ): Promise<EsbCorePage> {
     let rejectedAccessToken: string | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const tokenState = await this.token(deadline, rejectedAccessToken);
-      const response = await this.requestCollection(object, page, limit, deadline, tokenState);
+      const response = await this.requestCollection(object, request, deadline, tokenState);
       if (isCollectionPermissionDenied(response)) {
         throw this.error(getFailureCode(response.envelope) ?? String(response.status), "permission denied by ESB Core", {
           status: response.status,
@@ -291,7 +288,7 @@ export class EsbCoreApi {
         });
       }
       if (!isCollectionUnauthorized(response)) {
-        return this.decodeCollection(object, page, response, tokenState, fields);
+        return this.decodeCollection(object, request, response, tokenState);
       }
       rejectedAccessToken = tokenState.accessToken;
       this.invalidate(tokenState.accessToken);
@@ -308,10 +305,9 @@ export class EsbCoreApi {
 
   private decodeCollection(
     object: EsbCoreObject,
-    page: number,
+    request: EsbCollectionRequest,
     response: WireResponse,
     requestToken: TokenState,
-    fields?: readonly string[],
   ): EsbCorePage {
     const code = getFailureCode(response.envelope);
     if (!isSuccessfulStatus(response.status)) {
@@ -336,8 +332,10 @@ export class EsbCoreApi {
     }
 
     const result = success.data.result;
+    // a `result: null` collection is an empty read, not a malformed one
+    if (result === null) return { rows: [], hasNext: false };
     const parseRows = (data: unknown): SourceRow[] => {
-      const parsed = EsbCollectionRows(object, fields).safeParse(data);
+      const parsed = EsbCollectionRows(object, request.fields).safeParse(data);
       if (!parsed.success) {
         throw this.error("malformed-response", describeCollection(object, describeMalformedRows(object, parsed.error.issues)), {
           status: response.status,
@@ -350,7 +348,7 @@ export class EsbCoreApi {
     }
 
     const returnedPage = EsbPagedCollectionPage.safeParse(result);
-    if (!returnedPage.success || returnedPage.data.page !== page) {
+    if (!returnedPage.success || returnedPage.data.page !== request.page) {
       throw this.error("non-progressing-page", describeCollection(object, "returned a different or malformed page"), {
         status: response.status,
       });
@@ -363,9 +361,8 @@ export class EsbCoreApi {
     }
 
     return {
-      rows: parseRows(header.data.data),
-      page: header.data.page,
-      limit: header.data.limit,
+      rows: parseRows(header.data.data ?? []),
+      count: header.data.count,
       hasNext: (header.data.next ?? "").length > 0,
     };
   }

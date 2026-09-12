@@ -1,10 +1,15 @@
-// the connector wire contract as Zod schemas; no .transform() (it breaks z.toJSONSchema codegen)
+// the connector wire contract as zod schemas; no .transform() (it breaks z.toJSONSchema codegen)
 
 import { z } from "zod";
 import { CONNECTOR_LIMITS } from "./limits";
 import { AtlasType, AtlasValue, DateGrain, Filter, JoinField, UserSort } from "./vocabulary";
 
 const deadlineShape = { timeoutMs: z.number().int().min(1) } as const;
+
+const streamDeadlineShape = {
+  idleTimeoutMs: z.number().int().min(1),
+  maxTimeoutMs: z.number().int().min(1),
+} as const;
 
 // on every authed request; a connector holds none between calls
 export const Credentials = z.record(z.string(), z.string());
@@ -23,6 +28,7 @@ const SourceJoinWire = z
     fields: z.array(SourceJoinFieldWire),
   })
   .strict();
+
 const CompiledSortWire = UserSort.extend({ collate: z.boolean().optional() });
 
 export const SourceQueryWire = z
@@ -42,7 +48,9 @@ export type SourceQueryWire = z.infer<typeof SourceQueryWire>;
 
 // no avg: not pushable
 const PushedMeasureFn = z.enum(["count", "sum", "min", "max", "count_distinct"]);
+
 const GroupByWire = z.object({ field: z.string(), as: z.string(), grain: DateGrain.optional() }).strict();
+
 const MeasureWire = z.object({ fn: PushedMeasureFn, field: z.string().optional(), as: z.string() }).strict();
 
 export const AggregateSourceQueryWire = z
@@ -59,10 +67,6 @@ export const AggregateSourceQueryWire = z
   .strict();
 export type AggregateSourceQueryWire = z.infer<typeof AggregateSourceQueryWire>;
 
-// dialect mode: Atlas sends the compiled SQL verbatim
-export const DialectQueryBody = z.object({ sql: z.string(), params: z.array(AtlasValue) }).strict();
-export type DialectQueryBody = z.infer<typeof DialectQueryBody>;
-
 export const CheckRequest = WireAuthed;
 export type CheckRequest = z.infer<typeof CheckRequest>;
 
@@ -75,8 +79,8 @@ export type DiscoveryRequest = z.infer<typeof DiscoveryRequest>;
 export const NativeQueryRequest = SourceQueryWire.extend(authedShape);
 export type NativeQueryRequest = z.infer<typeof NativeQueryRequest>;
 
-export const DialectQueryRequest = DialectQueryBody.extend(authedShape);
-export type DialectQueryRequest = z.infer<typeof DialectQueryRequest>;
+export const NativeQueryStreamRequest = SourceQueryWire.extend(authedShape).extend(streamDeadlineShape);
+export type NativeQueryStreamRequest = z.infer<typeof NativeQueryStreamRequest>;
 
 export const CountRequest = SourceQueryWire.pick({
   table: true,
@@ -86,29 +90,18 @@ export const CountRequest = SourceQueryWire.pick({
 }).extend(authedShape);
 export type CountRequest = z.infer<typeof CountRequest>;
 
-const streamDeadlineShape = {
-  idleTimeoutMs: z.number().int().min(1),
-  maxTimeoutMs: z.number().int().min(1),
-} as const;
-
-export const NativeQueryStreamRequest = SourceQueryWire.extend(authedShape).extend(streamDeadlineShape);
-export type NativeQueryStreamRequest = z.infer<typeof NativeQueryStreamRequest>;
-
-export const DialectQueryStreamRequest = DialectQueryBody.extend(authedShape).extend(streamDeadlineShape);
-export type DialectQueryStreamRequest = z.infer<typeof DialectQueryStreamRequest>;
-
-// explicit group-row bound; more groups than limit means overflow, Atlas discards it
+// explicit group-row bound; more groups than limit is an overflow
 export const AggregateRequest = AggregateSourceQueryWire.extend({
   limit: z.number().int().min(1),
 }).extend(authedShape);
 export type AggregateRequest = z.infer<typeof AggregateRequest>;
 
-export const ProbeColumnsRequest = z
+export const CardinalityRequest = z
   .object({ table: z.string(), columns: z.array(z.string()).min(1) })
   .extend(authedShape);
-export type ProbeColumnsRequest = z.infer<typeof ProbeColumnsRequest>;
+export type CardinalityRequest = z.infer<typeof CardinalityRequest>;
 
-export const ProbeLinkRequest = z
+export const LinkHitRateRequest = z
   .object({
     fromTable: z.string(),
     fromColumn: z.string(),
@@ -116,32 +109,15 @@ export const ProbeLinkRequest = z
     toColumn: z.string(),
   })
   .extend(authedShape);
-export type ProbeLinkRequest = z.infer<typeof ProbeLinkRequest>;
+export type LinkHitRateRequest = z.infer<typeof LinkHitRateRequest>;
 
-export const ProbeGrainRequest = z.object({ table: z.string(), column: z.string() }).extend(authedShape);
-export type ProbeGrainRequest = z.infer<typeof ProbeGrainRequest>;
+export const SizeRequest = z.object({ table: z.string() }).extend(authedShape);
+export type SizeRequest = z.infer<typeof SizeRequest>;
 
-export const CountExactRequest = z.object({ table: z.string() }).extend(authedShape);
-export type CountExactRequest = z.infer<typeof CountExactRequest>;
+// every json answer is a wrapped object, never a bare array
 
-// answer: distinct non-null values as text, sorted (numbers by magnitude, else bytes), capped at limit, "" dropped after the cap
-export const SampleKeyValuesRequest = z
-  .object({
-    table: z.string(),
-    column: z.string(),
-    type: AtlasType,
-    limit: z.number().int().min(1),
-  })
-  .extend(authedShape);
-export type SampleKeyValuesRequest = z.infer<typeof SampleKeyValuesRequest>;
-
-// every JSON answer is a wrapped object, never a bare array
-
-// decimals and integers >2^53 cross as digit-exact strings; json/array columns as JSON text; datetimes ISO-8601 UTC
+// decimals and ints past 2^53 cross as digit-exact strings; json as json text, datetimes iso-8601 utc
 export const SourceRowWire = z.record(z.string(), AtlasValue);
-
-export const QueryAnswer = z.object({ rows: z.array(SourceRowWire) });
-export type QueryAnswer = z.infer<typeof QueryAnswer>;
 
 export const AggregateAnswer = z.object({ rows: z.array(SourceRowWire) });
 export type AggregateAnswer = z.infer<typeof AggregateAnswer>;
@@ -149,13 +125,15 @@ export type AggregateAnswer = z.infer<typeof AggregateAnswer>;
 export const CountAnswer = z.object({ count: z.number().int() });
 export type CountAnswer = z.infer<typeof CountAnswer>;
 
-// null count sits inside the wrapper, never a bare null body
-export const CountExactAnswer = z.object({ count: z.number().int().nullable() });
-export type CountExactAnswer = z.infer<typeof CountExactAnswer>;
+// the whole table's row count; exact false when the upstream only estimates
+export const SizeWire = z.object({ rows: z.number().int().min(0), exact: z.boolean() }).strict();
+export type EntitySize = z.infer<typeof SizeWire>;
 
-export const SampleKeyValuesAnswer = z.object({ values: z.array(z.string()) });
-export type SampleKeyValuesAnswer = z.infer<typeof SampleKeyValuesAnswer>;
+// null size sits inside the wrapper, never a bare null body
+export const SizeAnswer = z.object({ size: SizeWire.nullable() });
+export type SizeAnswer = z.infer<typeof SizeAnswer>;
 
+// a declared edge, enforced upstream or not
 export const ForeignKeyWire = z
   .object({
     field: z.string(),
@@ -163,6 +141,7 @@ export const ForeignKeyWire = z
     targetField: z.string(),
   })
   .strict();
+
 export const FieldStatsWire = z
   .object({
     nullPercent: z.number().optional(),
@@ -171,60 +150,52 @@ export const FieldStatsWire = z
     max: z.string().optional(),
   })
   .strict();
+
 export const DiscoveredFieldWire = z
   .object({
     name: z.string(),
-    sourceColumn: z.string(),
+    sourceColumn: z.string(), // the upstream spelling; equal to name unless the connector renames it
     type: AtlasType,
     nullable: z.boolean(),
-    unique: z.boolean(),
+    unique: z.boolean(), // a real upstream UNIQUE/PK constraint, never sampled distinctness
     samples: z.array(AtlasValue),
     sourceDescription: z.string(),
-    stats: FieldStatsWire.optional(),
-    filterable: z.boolean().optional(),
+    stats: FieldStatsWire.optional(), // omit rather than guess
+    filterable: z.boolean().optional(), // absent means yes
     groupable: z.boolean().optional(),
     aggregatable: z.boolean().optional(),
   })
   .strict();
+
 export const DiscoveredTableWire = z
   .object({
     name: z.string(),
     sourceDescription: z.string(),
-    rowCount: z.number().int().optional(),
-    storesRows: z.boolean(),
-    primaryKey: z.array(z.string()),
+    rowCount: z.number().int().optional(), // set it only when the upstream total is free
+    storesRows: z.boolean(), // false for an endpoint that only computes
+    primaryKey: z.array(z.string()), // [] declares no key, not that you did not look
     foreignKeys: z.array(ForeignKeyWire),
-    fields: z.array(DiscoveredFieldWire),
+    fields: z.array(DiscoveredFieldWire), // one left out can never be filtered, sorted or projected
   })
   .strict();
+
 export const DiscoveryAnswer = z.object({
   tables: z.array(DiscoveredTableWire),
-  warnings: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(), // non-fatal notes shown to the tenant
 });
 export type DiscoveryAnswer = z.infer<typeof DiscoveryAnswer>;
 
-export const ColumnDuplicatesWire = z
-  .object({
-    valueCount: z.number().int(),
-    maxMultiplicity: z.number().int(),
-    samples: z.array(z.string()).optional(),
-  })
+export const ColumnCardinalityWire = z
+  .object({ nonNull: z.number().int(), distinct: z.number().int() })
   .strict();
-export const ColumnCountsProbeWire = z
-  .object({
-    nonNull: z.number().int(),
-    distinct: z.number().int(),
-    duplicates: ColumnDuplicatesWire.nullable(),
-  })
-  .strict();
-// columns as a record on the wire; a Map JSON-serializes to {} silently
-export const TableColumnsProbeWire = z
-  .object({
-    rows: z.number().int(),
-    columns: z.record(z.string(), ColumnCountsProbeWire),
-  })
-  .strict();
-export const LinkProbeWire = z
+
+// null for a column the source cannot count distinctly
+export const CardinalityWire = z.record(z.string(), ColumnCardinalityWire.nullable());
+
+export const CardinalityAnswer = z.object({ columns: CardinalityWire });
+export type CardinalityAnswer = z.infer<typeof CardinalityAnswer>;
+
+export const LinkHitRateWire = z
   .object({
     fromNonNull: z.number().int(),
     orphanCount: z.number().int(),
@@ -232,33 +203,36 @@ export const LinkProbeWire = z
     orphanSamples: z.array(z.string()),
   })
   .strict();
-export const GrainProbeWire = z
-  .object({
-    rows: z.number().int(),
-    distinct: z.number().int(),
-    nonNull: z.number().int(),
-  })
-  .strict();
 
-// connector-side names for the answer shapes — z.infer so they cannot drift from the wire
+// connector-side names, z.infer so they cannot drift from the wire
 export type DiscoveredTable = z.infer<typeof DiscoveredTableWire>;
 export type DiscoveredField = z.infer<typeof DiscoveredFieldWire>;
-export type TableColumnsProbe = z.infer<typeof TableColumnsProbeWire>;
-export type ColumnCountsProbe = z.infer<typeof ColumnCountsProbeWire>;
-export type ColumnDuplicates = z.infer<typeof ColumnDuplicatesWire>;
-export type LinkProbe = z.infer<typeof LinkProbeWire>;
-export type GrainProbe = z.infer<typeof GrainProbeWire>;
+export type ColumnCardinality = z.infer<typeof ColumnCardinalityWire>;
+export type TableCardinality = z.infer<typeof CardinalityWire>;
+export type LinkHitRate = z.infer<typeof LinkHitRateWire>;
 
 export const WireError = z.object({
   error: z.object({ code: z.string(), message: z.string() }),
 });
 export type WireError = z.infer<typeof WireError>;
 
-// {end:1} or {error} terminates; a close without either is a truncated stream, the reader must fail
+// what the connector applied upstream; false leaves that part to the host
+export const ServedWire = z
+  .object({
+    filters: z.boolean(), // true only when every and/or predicate ran upstream with atlas semantics
+    sort: z.boolean(),
+    window: z.boolean(), // offset and limit applied, and no row exists beyond them
+  })
+  .strict();
+export type Served = z.infer<typeof ServedWire>;
+
+// {served} leads, {end:1} or {error} terminates; a close without either is a truncated stream
+// every branch is strict, so a line mixing kinds fails instead of matching the first
 export const StreamLine = z.union([
-  z.object({ rows: z.array(SourceRowWire).min(1).max(CONNECTOR_LIMITS.rowsPerBatch) }),
-  z.object({ ping: z.literal(1) }),
-  z.object({ error: WireError.shape.error }),
-  z.object({ end: z.literal(1) }),
+  z.object({ served: ServedWire }).strict(),
+  z.object({ rows: z.array(SourceRowWire).min(1).max(CONNECTOR_LIMITS.rowsPerBatch) }).strict(),
+  z.object({ ping: z.literal(1) }).strict(),
+  z.object({ error: WireError.shape.error }).strict(),
+  z.object({ end: z.literal(1) }).strict(),
 ]);
 export type StreamLine = z.infer<typeof StreamLine>;

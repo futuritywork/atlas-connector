@@ -1,11 +1,12 @@
-// root barrel — the SDK's public surface (SDK-SPEC §3.1). the SqlConnector path lives under "./sql".
+// the sdk's public surface; the SqlConnector path lives under "./sql"
 
 export * from "./wire/vocabulary";
 export * from "./wire/limits";
 export * from "./wire/schemas";
 export * from "./wire/atlas-json";
 
-export { AtlasConnector } from "./connector";
+export { AtlasConnector, type QueryChunk, SERVED_NOTHING, windowRows } from "./connector";
+export { field, defineCatalog, fieldTypes, discoverFields, type Field, type Catalog } from "./catalog";
 
 export { createApp, serve, type ServeOptions } from "./serve/serve";
 export {
@@ -26,11 +27,15 @@ export { ndjsonStream } from "./serve/stream";
 export { applyFilters, byteOrderCompare, decimalCompare } from "./kit/apply-filters";
 export { assertKnownFields } from "./kit/assert-known-fields";
 export {
-  columnCountsFromValues,
-  DUP_SAMPLE_CAP,
-  grainFromValues,
+  defineCapability,
+  type EntityPushdown,
+  type Pushdown,
+  pushdownCapabilities,
+  pushedOps,
+} from "./kit/pushdown";
+export {
+  cardinalityFromValues,
+  columnTally,
   linkFromValues,
-  NEAR_UNIQUE_MIN_SHARE,
   ORPHAN_SAMPLE_CAP,
-  sampleFromValues,
-} from "./kit/probe-math";
+} from "./kit/measure";

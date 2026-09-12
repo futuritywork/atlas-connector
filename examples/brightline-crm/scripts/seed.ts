@@ -6,7 +6,13 @@ const DATABASE_URL =
   process.env.CONNECTOR_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5434/brightline";
 
-// #region deterministic PRNG — same seed always yields the same probe numbers
+const CHUNK_ROWS = 1000; // rows per multi-row INSERT
+
+type Cell = string | number | boolean | null;
+
+type TableSeed = { name: string; columns: string[]; rows: () => Cell[][] };
+
+// #region deterministic PRNG: same seed always yields the same probe numbers
 function mulberry32(seed: number): () => number {
   let a = seed;
   return () => {
@@ -176,8 +182,6 @@ const TITLES = [
 ] as const;
 // #endregion
 
-type Cell = string | number | boolean | null;
-
 function pad(value: number, width: number): string {
   return String(value).padStart(width, "0");
 }
@@ -228,7 +232,6 @@ function companies(): Cell[][] {
     );
   }
 
-  const domains: (string | null)[] = [];
   for (let id = 1; id <= COUNTS.companies; id++) {
     let name: string;
     if (id <= COMPANY_CASE_PAIRS) {
@@ -241,8 +244,6 @@ function companies(): Cell[][] {
     if (id % 500 === 0) name = `${name} `; // a few trailing-space blemishes
 
     const domain = rng.chance(0.05) ? null : `acct${id}.example`;
-    domains.push(domain);
-
     rows.push([
       id,
       name,
@@ -434,16 +435,82 @@ CREATE TABLE ${CONFIG.schema}.activities (
 );
 `;
 
-async function insertRows(
-  sql: SQL,
-  table: string,
-  columns: string[],
-  rows: Cell[][],
-): Promise<void> {
-  const chunkSize = 1000;
-  const colList = columns.map((c) => `"${c}"`).join(", ");
-  for (let start = 0; start < rows.length; start += chunkSize) {
-    const chunk = rows.slice(start, start + chunkSize);
+// load order satisfies the FK edges above; each column list is the generator's cell order
+const TABLES: TableSeed[] = [
+  {
+    name: "owners",
+    columns: ["id", "email", "full_name", "team", "hired_on", "active"],
+    rows: owners,
+  },
+  {
+    name: "companies",
+    columns: [
+      "id",
+      "name",
+      "domain",
+      "industry",
+      "employee_count",
+      "annual_revenue",
+      "billing_country",
+      "erp_account_code",
+      "created_at",
+    ],
+    rows: companies,
+  },
+  {
+    name: "contacts",
+    columns: [
+      "id",
+      "company_id",
+      "email",
+      "first_name",
+      "last_name",
+      "title",
+      "phone",
+      "lifecycle_stage",
+      "created_at",
+    ],
+    rows: contacts,
+  },
+  {
+    name: "deals",
+    columns: [
+      "id",
+      "company_id",
+      "primary_contact_id",
+      "owner_id",
+      "name",
+      "stage",
+      "amount",
+      "currency",
+      "expected_close",
+      "closed_at",
+      "created_at",
+    ],
+    rows: deals,
+  },
+  {
+    name: "activities",
+    columns: [
+      "id",
+      "deal_id",
+      "contact_id",
+      "owner_id",
+      "kind",
+      "subject",
+      "tags",
+      "occurred_at",
+      "duration_minutes",
+    ],
+    rows: activities,
+  },
+];
+
+async function insertRows(sql: SQL, table: TableSeed): Promise<void> {
+  const colList = table.columns.map((column) => `"${column}"`).join(", ");
+  const rows = table.rows();
+  for (let start = 0; start < rows.length; start += CHUNK_ROWS) {
+    const chunk = rows.slice(start, start + CHUNK_ROWS);
     const params: Cell[] = [];
     const tuples = chunk.map((row) => {
       const placeholders = row.map((value) => {
@@ -453,7 +520,7 @@ async function insertRows(
       return `(${placeholders.join(", ")})`;
     });
     await sql.unsafe(
-      `INSERT INTO ${CONFIG.schema}.${table} (${colList}) VALUES ${tuples.join(", ")}`,
+      `INSERT INTO ${CONFIG.schema}.${table.name} (${colList}) VALUES ${tuples.join(", ")}`,
       params,
     );
   }
@@ -469,8 +536,8 @@ async function ensureDatabase(): Promise<void> {
     await sql.unsafe(`CREATE DATABASE "${dbName.replace(/"/g, '""')}"`);
     console.log(`created database ${dbName}`);
   } catch (error) {
-    if (!String((error as Error).message).includes("already exists"))
-      throw error;
+    const alreadyThere = error instanceof Error && error.message.includes("already exists");
+    if (!alreadyThere) throw error;
   } finally {
     await sql.close();
   }
@@ -481,90 +548,12 @@ async function main(): Promise<void> {
   const sql = new SQL(DATABASE_URL);
   try {
     await sql.unsafe(DDL);
-    await insertRows(
-      sql,
-      "owners",
-      ["id", "email", "full_name", "team", "hired_on", "active"],
-      owners(),
-    );
-    await insertRows(
-      sql,
-      "companies",
-      [
-        "id",
-        "name",
-        "domain",
-        "industry",
-        "employee_count",
-        "annual_revenue",
-        "billing_country",
-        "erp_account_code",
-        "created_at",
-      ],
-      companies(),
-    );
-    await insertRows(
-      sql,
-      "contacts",
-      [
-        "id",
-        "company_id",
-        "email",
-        "first_name",
-        "last_name",
-        "title",
-        "phone",
-        "lifecycle_stage",
-        "created_at",
-      ],
-      contacts(),
-    );
-    await insertRows(
-      sql,
-      "deals",
-      [
-        "id",
-        "company_id",
-        "primary_contact_id",
-        "owner_id",
-        "name",
-        "stage",
-        "amount",
-        "currency",
-        "expected_close",
-        "closed_at",
-        "created_at",
-      ],
-      deals(),
-    );
-    await insertRows(
-      sql,
-      "activities",
-      [
-        "id",
-        "deal_id",
-        "contact_id",
-        "owner_id",
-        "kind",
-        "subject",
-        "tags",
-        "occurred_at",
-        "duration_minutes",
-      ],
-      activities(),
-    );
-
-    for (const table of [
-      "owners",
-      "companies",
-      "contacts",
-      "deals",
-      "activities",
-    ]) {
-      const [row] = await sql.unsafe(
-        `SELECT COUNT(*)::int AS n FROM ${CONFIG.schema}.${table}`,
-      );
-      console.log(`${table}: ${(row as { n: number }).n}`);
+    for (const table of TABLES) {
+      await insertRows(sql, table);
+    }
+    for (const { name } of TABLES) {
+      const [row] = await sql.unsafe(`SELECT COUNT(*)::int AS n FROM ${CONFIG.schema}.${name}`);
+      console.log(`${name}: ${row.n}`);
     }
   } finally {
     await sql.close();

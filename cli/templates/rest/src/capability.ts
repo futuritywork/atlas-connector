@@ -1,25 +1,24 @@
-// the served /.well-known/futurity/atlas.json. every flag is EARNED; start narrow,
-// widen only as query() learns to honor it (pushdown or applyFilters, either counts)
-import { type AtlasJson, OPS } from "@futurity/atlas-connector";
+import { defineCapability, type CapabilityDoc, type Pushdown } from "@futurity/atlas-connector";
 
-export const ATLAS_JSON: AtlasJson = {
-  protocolVersion: 1,
-  slug: "my-atlas-connector",
-  capabilities: {
-    // YOUR CODE HERE: only ops query() honors, via pushdown or applyFilters
-    operators: ["eq", "neq", "isnull", "notnull"],
-    dateBucket: false,
-    sort: "none",
-    offset: false,
-    count: "server",
-    join: false, // false = Atlas joins hops locally
-    enforcesDeclaredKeys: false,
-    probeConcurrency: 4,
-    cheapProbes: false,
+// YOUR CODE HERE: the ops your upstream request builder can send, per entity or per field
+// {} pushes nothing and Atlas narrows itself; widen a field only once query() puts it on the wire
+export const PUSHDOWN: Pushdown = {
+  entities: {
+    companies: { fields: { id: ["eq", "in"], created_at: ["gte", "lte"] } },
   },
-  // YOUR CODE HERE: what a tenant types to reach their own instance. "password" masks the input, "textarea" fits a pasted key, required: false lets it stay blank.
-  // help is markdown under the label: name the exact page in the vendor's ui and link its doc
-  credentialSchema: [
+  sort: "none",
+  offset: false,
+  join: false,
+};
+
+// the served atlas.json; emitted from PUSHDOWN, so an advertised op is one you push
+export const ATLAS_JSON: CapabilityDoc = defineCapability({
+  slug: "my-atlas-connector",
+  pushdown: PUSHDOWN,
+  limits: { pageSizeMax: 100, concurrency: 1 }, // YOUR CODE HERE: the vendor's own ceilings; a cursor api is concurrency 1
+  keysEnforced: false, // true only where the upstream rejects a duplicate in a field you declare unique
+  dateBucket: false, // true only once aggregate() buckets a date field upstream
+  credentialSchema: [ // YOUR CODE HERE: what a tenant types to reach their instance; help is markdown under the label
     {
       key: "baseUrl",
       label: "API base URL",
@@ -36,5 +35,4 @@ export const ATLAS_JSON: AtlasJson = {
       help: "Vendor console → **Settings → API keys → Create key**. Copy it when it is shown; the console never shows it again.",
     },
   ],
-  endpoints: [], // add "aggregate" only when you override aggregate()
-};
+});

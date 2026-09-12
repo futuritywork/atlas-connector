@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { ATLAS_JSON_MAX_BYTES, ATLAS_JSON_PATH, AtlasJson, SourceCapabilitiesWire } from "./atlas-json";
+import {
+  ATLAS_JSON_MAX_BYTES,
+  ATLAS_JSON_PATH,
+  AtlasJson,
+  ConnectorLimitsWire,
+  SourceCapabilitiesWire,
+} from "./atlas-json";
 import { CONNECTOR_LIMITS } from "./limits";
 
 const capabilities = {
@@ -7,11 +13,9 @@ const capabilities = {
   dateBucket: false,
   sort: "none",
   offset: false,
-  count: "server",
   join: false,
-  enforcesDeclaredKeys: false,
-  probeConcurrency: 4,
-  cheapProbes: false,
+  keysEnforced: false,
+  limits: { concurrency: 4 },
 };
 
 const doc = {
@@ -59,13 +63,18 @@ describe("AtlasJson", () => {
     expect(AtlasJson.safeParse({ ...doc, protocolVersion: 2 }).success).toBe(false);
   });
 
-  test("aggregate is the only optional endpoint", () => {
-    expect(AtlasJson.safeParse({ ...doc, endpoints: ["aggregate"] }).success).toBe(true);
+  test("endpoints name the optional protocol methods, and nothing else", () => {
+    const every = ["size", "count", "aggregate", "cardinality", "linkHitRate"];
+    expect(AtlasJson.safeParse({ ...doc, endpoints: every }).success).toBe(true);
     expect(AtlasJson.safeParse({ ...doc, endpoints: ["dialectQuery"] }).success).toBe(false);
+    expect(AtlasJson.safeParse({ ...doc, endpoints: ["probe"] }).success).toBe(false);
   });
 });
 
 describe("credentialSchema", () => {
+  const field = { key: "apiKey", label: "API key", type: "text" as const };
+  const withCredential = (credential: unknown) => ({ ...doc, credentialSchema: [credential] });
+
   test("is required; a connector with no upstream secret says so with an empty array", () => {
     const { credentialSchema: _dropped, ...credless } = doc;
     expect(AtlasJson.safeParse(credless).success).toBe(false);
@@ -73,35 +82,25 @@ describe("credentialSchema", () => {
   });
 
   test("a field is key, label, a text, password or textarea type, and nothing else", () => {
-    const field = { key: "apiKey", label: "API key", type: "text" };
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [field] }).success).toBe(true);
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "textarea" }] }).success).toBe(
-      true,
-    );
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, type: "secret" }] }).success).toBe(
-      false,
-    );
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, hint: "x" }] }).success).toBe(false);
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ key: "apiKey", type: "text" }] }).success).toBe(
-      false,
-    );
+    expect(AtlasJson.safeParse(withCredential(field)).success).toBe(true);
+    expect(AtlasJson.safeParse(withCredential({ ...field, type: "textarea" })).success).toBe(true);
+    expect(AtlasJson.safeParse(withCredential({ ...field, type: "secret" })).success).toBe(false);
+    expect(AtlasJson.safeParse(withCredential({ ...field, hint: "x" })).success).toBe(false);
+    expect(AtlasJson.safeParse(withCredential({ key: "apiKey", type: "text" })).success).toBe(false);
   });
 
   test("required defaults to true, so an omitted flag never makes a field optional", () => {
-    const field = { key: "apiKey", label: "API key", type: "text" };
-    expect(AtlasJson.parse({ ...doc, credentialSchema: [field] }).credentialSchema[0]?.required).toBe(true);
-    const optional = AtlasJson.parse({ ...doc, credentialSchema: [{ ...field, required: false }] });
+    expect(AtlasJson.parse(withCredential(field)).credentialSchema[0]?.required).toBe(true);
+    const optional = AtlasJson.parse(withCredential({ ...field, required: false }));
     expect(optional.credentialSchema[0]?.required).toBe(false);
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, required: "yes" }] }).success).toBe(
-      false,
-    );
+    expect(AtlasJson.safeParse(withCredential({ ...field, required: "yes" })).success).toBe(false);
   });
 
   test("placeholder and help are optional strings", () => {
-    const field = { key: "apiKey", label: "API key", type: "text" as const, required: true };
-    const described = { ...field, placeholder: "sk_live_XXXXXXXXXX", help: "Settings -> [API keys](https://x.dev)." };
-    expect(AtlasJson.parse({ ...doc, credentialSchema: [described] }).credentialSchema[0]).toEqual(described);
-    expect(AtlasJson.safeParse({ ...doc, credentialSchema: [{ ...field, help: 7 }] }).success).toBe(false);
+    const help = "Settings -> [API keys](https://x.dev).";
+    const described = { ...field, required: true, placeholder: "sk_live_XXXXXXXXXX", help };
+    expect(AtlasJson.parse(withCredential(described)).credentialSchema[0]).toEqual(described);
+    expect(AtlasJson.safeParse(withCredential({ ...field, help: 7 })).success).toBe(false);
   });
 });
 
@@ -110,19 +109,27 @@ describe("SourceCapabilitiesWire", () => {
     expect(SourceCapabilitiesWire.safeParse({ ...capabilities, streaming: true }).success).toBe(false);
   });
 
-  test("operators must be known and non-empty", () => {
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, operators: [] }).success).toBe(false);
+  test("operators must be known ops", () => {
     expect(SourceCapabilitiesWire.safeParse({ ...capabilities, operators: ["like"] }).success).toBe(false);
   });
 
-  test("probeConcurrency stays within 1..8", () => {
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, probeConcurrency: 0 }).success).toBe(false);
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, probeConcurrency: 9 }).success).toBe(false);
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, probeConcurrency: 8 }).success).toBe(true);
+  test("operators may be empty: a source that pushes nothing says so", () => {
+    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, operators: [] }).success).toBe(true);
+  });
+});
+
+describe("limits", () => {
+  test("concurrency is required and stays within 1..16", () => {
+    expect(ConnectorLimitsWire.safeParse({}).success).toBe(false);
+    expect(ConnectorLimitsWire.safeParse({ concurrency: 0 }).success).toBe(false);
+    expect(ConnectorLimitsWire.safeParse({ concurrency: 17 }).success).toBe(false);
+    expect(ConnectorLimitsWire.safeParse({ concurrency: 16 }).success).toBe(true);
   });
 
-  test("maxOffset is optional but never negative", () => {
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, maxOffset: 10_000 }).success).toBe(true);
-    expect(SourceCapabilitiesWire.safeParse({ ...capabilities, maxOffset: -1 }).success).toBe(false);
+  test("the vendor ceilings are optional, and never negative", () => {
+    const limits = { concurrency: 1, pageSizeMax: 500, rowsPerTableMax: 20_000, offsetMax: 10_000 };
+    expect(ConnectorLimitsWire.safeParse(limits).success).toBe(true);
+    expect(ConnectorLimitsWire.safeParse({ ...limits, offsetMax: -1 }).success).toBe(false);
+    expect(ConnectorLimitsWire.safeParse({ ...limits, pageSizeMax: 0 }).success).toBe(false);
   });
 });

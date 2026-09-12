@@ -95,60 +95,106 @@ import { MyConnector } from "./connector";
 serve(new MyConnector(), { token: process.env.ATLAS_CONNECTOR_TOKEN ?? "", port: 4100 });
 ```
 
-There is nothing to obtain for `ATLAS_CONNECTOR_TOKEN`: you mint it (`openssl rand -hex 24`), set it on the connector, and paste the same value into the Token field when registering the source in Atlas.
+There is nothing to obtain for `ATLAS_CONNECTOR_TOKEN`: you mint it (`openssl
+rand -hex 24`), set it on the connector, and paste the same value into the Token
+field when registering the source in Atlas.
 
 `SqlConnector` implements every protocol method over `run()`: `check`
-(`SELECT 1`), discovery, queries, streaming, counts, profiling, and GROUP BY
-pushdown. Pools are cached per credential set, and an evicted pool closes only
-once the last request holding it is done. The capability doc, including
-the default `databaseUrl` credential, is **derived from the catalog and
-flavor**, so the connector can never advertise an operator its builders won't
-render.
+(`SELECT 1`), discovery, streaming queries, `size`, `count`, `cardinality`,
+`linkHitRate`, and GROUP BY pushdown. Pools are cached per credential set, and
+an evicted pool closes only once the last request holding it is done. The
+capability doc, including the default `databaseUrl` credential, is **derived
+from the catalog and flavor**, so the connector can never advertise an operator
+its builders won't render.
 
 ## Quickstart: a REST / ERP API
 
-Extend `AtlasConnector`. Four methods carry everything the source alone knows:
+Extend `AtlasConnector`. Three methods carry everything the source alone knows:
 
-| method          | you return                                                                         |
-| --------------- | ---------------------------------------------------------------------------------- |
-| `check(req)`    | nothing; throw if `req.credentials` are wrong, and the tenant reads it              |
-| `query(req)`    | batches of rows (≤5000 each): push what the API filters, `applyFilters()` the rest  |
-| `count(req)`    | how many rows match the filters                                                     |
-| `discover(req)` | the API's entities as `{ tables, warnings? }`                                       |
+| method           | you return                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `check(req)`     | nothing; throw if `req.credentials` are wrong, and the tenant reads it              |
+| `query(req)`     | batches of rows (≤5000 each): push what the API filters, `applyFilters()` the rest  |
+| `discovery(req)` | the API's entities as `{ tables, warnings? }`                                       |
 
-The profiling five (`profileColumns`, `profileLink`, `profileGrain`,
-`exactCount`, `sampleColumnValues`) scan through your `query()` on the base
-class and are correct by default; override one only to make it cheaper.
-`aggregate()` declines with a 204 until you implement it.
+`size(req)` is the fourth, and it is strongly recommended: the table's total
+from the upstream's own metadata in one request (`totalResults`, `result.count`,
+a Lark `total`, a `recordCount`), `exact: false` for an estimate, `null` for a
+table that has no total. Leave it out and Atlas has to pull the table to its cap
+plus one row to learn how big it is.
+
+`count`, `aggregate`, `cardinality` and `linkHitRate` are optional overrides
+with **no default bodies**. A method you do not write is a route `serve()` never
+mounts and an entry the capability doc never lists, so Atlas measures the fact
+itself instead of trusting a number the connector guessed. Write one only where
+the upstream does the math: a count endpoint, a GROUP BY, a `COUNT DISTINCT`, a
+LEFT JOIN.
 
 `serve()` owns bearer auth, body parsing, timeouts, heartbeats, and the error
 envelope. The kit meets you halfway: `applyFilters` evaluates residual filters
 in memory with exactly the SQL engine's semantics, `assertKnownFields` turns a
 filter you cannot answer into a 422 (rows that skipped a filter read as rows
-that matched it), and `columnCountsFromValues` / `linkFromValues` /
-`grainFromValues` turn fetched values into probe answers.
+that matched it), and `cardinalityFromValues` / `columnTally` / `linkFromValues`
+turn fetched values into measurement answers.
 
-A REST connector authors its own `capability.ts`, the honesty contract. Only
-you know which ops your pushdown + `applyFilters` combination honors, and only
-you know which credentials your API needs; every flag is earned, and the
-starter begins narrow. See [`examples/lark`](examples/lark) for a metadata-led
-REST source and [`examples/esb`](examples/esb) for a complete fixed-catalog ERP
-connector with strict envelopes, partial discovery, paging, sorting, and
-process-local token coordination.
+A REST connector declares one `Pushdown` map (the same object `query()` reads
+to build the upstream request), and `defineCapability` emits `operators`, `sort`,
+`offset` and `join` from it, so an advertised op is always an op you push. The
+rest of the doc is the vendor block no code can introspect: `limits`
+(`pageSizeMax`, `rowsPerTableMax`, `concurrency`, `offsetMax`), `keysEnforced`,
+`dateBucket`, `credentialSchema`, `slug`, `dialect`. `endpoints` is never typed
+by an author: `serve()` fills it from the methods above at boot. See
+[`examples/lark`](examples/lark) for a metadata-led REST source and
+[`examples/esb`](examples/esb) for a complete fixed-catalog ERP connector with
+strict envelopes, partial discovery, paging, sorting, and process-local token
+coordination.
+
+Declare metadata once, then use it for discovery, field lookup, and residual
+filtering. Static APIs and fields fetched at runtime use the same functions:
+
+```ts
+import { defineCatalog, discoverFields, field, fieldTypes } from "@futurity/atlas-connector";
+
+const companies = {
+  name: "companies",
+  columns: [
+    field("id", "number", { nullable: false, unique: true }),
+    field("code", "string", { nullable: true }),
+  ],
+};
+const catalog = defineCatalog([companies]);
+const fields = discoverFields(companies.columns);
+const types = fieldTypes(companies.columns);
+```
+
+`field` defaults to non-nullable, non-unique, and an empty description. Declare
+uniqueness only when the source guarantees it; sampled distinct values are not
+a constraint. Catalogs preserve provider-specific table and column properties.
+Lark derives fields from tenant metadata; SQL adds storage spelling with `col`.
+Bind filters against your discovered types, never against the `fieldTypes` a
+request carries.
+
+Sorting requires collecting every matching row before offset and limit; it does
+not make a paginated upstream globally sorted. Keep nulls last in both
+directions. Normalize legitimately missing cells at ingestion, and never mask a
+missing required field as null.
 
 ## The protocol
 
 A connector serves one unauthenticated GET,
-`/.well-known/futurity/atlas.json` (the capability doc), plus eleven
-bearer-guarded POST endpoints (`/check`, `/discovery`, `/query`,
-`/query/stream`, `/count`, `/count/exact`, `/aggregate`, `/probe/columns`,
-`/probe/link`, `/probe/grain`, `/sample/keyValues`). Every POST body carries
-`credentials` and `timeoutMs`. The wire contract is defined, executably, by the
-Zod schemas in [`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers,
-stream lines) and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the
-capability doc). [`examples/`](examples) holds three complete connectors across the SQL and
-REST/ERP paths. Before registering a connector with Atlas, grade it with the
-`atlas-conform` conformance runner.
+`/.well-known/futurity/atlas.json` (the capability doc), plus three
+bearer-guarded POST endpoints every connector has (`/check`, `/discovery`,
+`/query`) and five served only where the method behind them is overridden
+(`/size`, `/count`, `/aggregate`, `/cardinality`, `/linkHitRate`). `/query`
+answers NDJSON and nothing else; there is no drained form. Its first line is
+always `{"served":{"filters":bool,"sort":bool,"window":bool}}`, what the
+upstream applied for that one query, and the rows follow. Every POST body
+carries `credentials` and `timeoutMs`. The Zod schemas in
+[`src/wire/schemas.ts`](src/wire/schemas.ts) (requests, answers, stream lines)
+and [`src/wire/atlas-json.ts`](src/wire/atlas-json.ts) (the capability doc) are
+the wire contract, executably. [`examples/`](examples) holds four complete
+connectors across the SQL and REST/ERP paths. Before registering a connector
+with Atlas, grade it with the `atlas-conform` conformance runner.
 
 ## API reference
 
@@ -158,45 +204,76 @@ REST/ERP paths. Before registering a connector with Atlas, grade it with the
 `UserSort`, `JoinField`, `DATE_GRAINS`/`DateGrain`, `SourceRow`): the shared
 protocol types. `SourceRow` is the wire-legal row a connector returns:
 `Record<string, string | number | boolean | null>`. `AtlasNumeric`,
-`AtlasBoolean`, `AtlasDate`, and `AtlasDatetime` validate a
-scalar once its catalog type is known.
+`AtlasBoolean`, `AtlasDate`, and `AtlasDatetime` validate a scalar once its
+catalog type is known.
 
 **Wire schemas**: every request (`CheckRequest`, `DiscoveryRequest`,
-`NativeQueryRequest`, `NativeQueryStreamRequest`, `CountRequest`,
-`CountExactRequest`, `AggregateRequest`, `ProbeColumnsRequest`,
-`ProbeLinkRequest`, `ProbeGrainRequest`, `SampleKeyValuesRequest`, dialect-mode
-duals), `Credentials`, every answer (`QueryAnswer`, `CountAnswer`,
-`DiscoveryAnswer`, ...), `StreamLine`, `WireError`, and the probe/discovery
-result types (`DiscoveredTable`, `TableColumnsProbe`, `LinkProbe`,
-`GrainProbe`, ...). `CONNECTOR_LIMITS` holds the protocol's size and heartbeat
-bounds. `AtlasJson`, `SourceCapabilitiesWire`, `CredentialField`,
+`NativeQueryRequest`, `NativeQueryStreamRequest`, `CountRequest`, `SizeRequest`,
+`AggregateRequest`, `CardinalityRequest`, `LinkHitRateRequest`), `Credentials`,
+every answer (`CountAnswer`, `SizeAnswer`, `CardinalityAnswer`,
+`DiscoveryAnswer`, ...), `StreamLine`, `WireError`, and the result types
+(`DiscoveredTable`, `EntitySize`, `TableCardinality`, `ColumnCardinality`,
+`LinkHitRate`, ...). `CONNECTOR_LIMITS` holds the protocol's size and heartbeat
+bounds. `AtlasJson`, `CapabilityDoc`, `SourceCapabilitiesWire`,
+`ConnectorLimitsWire`, `CONNECTOR_ENDPOINTS`, `CredentialField`,
 `ATLAS_JSON_PATH` describe the capability doc.
 
-**`AtlasConnector`**: the class to inherit, in four planes: identity (`slug`,
-`capability`, `check`), query (`query`, `count`, `aggregate`), discovery
-(`discover`), and profiling (`profileColumns`, `profileLink`, `profileGrain`,
-`exactCount`, `sampleColumnValues`, all derived from `query`).
+**`AtlasConnector`**: the class to inherit. Five members are abstract (`slug`,
+`capabilities`, `check`, `query`, `discovery`) and five are optional overrides
+with no default body: `size` (strongly recommended), `count`, `aggregate`,
+`cardinality`, `linkHitRate`. The ones you write become the doc's `endpoints`
+and the routes `serve()` mounts.
+
+**The served plan**: `query()` yields row batches, and may yield one
+`{ served }` chunk before the first batch (`QueryChunk`, `Served`). It is the
+connector's account of that one request: `filters` true means every `and`/`or`
+predicate was applied upstream with Atlas's own semantics, so the rows are the
+matching set and not a superset; `sort` true means they arrive in the requested
+order; `window` true means `offset`/`limit` were applied and no row exists past
+them. Yield nothing and Atlas reads `SERVED_NOTHING`, a superset it filters,
+sorts and windows itself. A claim is a promise: never window rows whose filter
+or order you left to the host, and the serve layer clamps a window claimed over
+an unserved filter or order back to false. Atlas answers a fully served query
+straight off the wire: a top-N becomes one request instead of a whole-entity
+pull.
+
+**Catalog**: `field(name, type, { nullable?, unique?, description? })`,
+`defineCatalog(tables)` with `getTable` / `getColumn`, `fieldTypes(fields)`, and
+`discoverFields(fields)`. `Field` derives from the discovery wire contract and
+`Catalog<T>` retains table extensions; a duplicate table or field name throws at
+construction, never at request time. Samples and statistics are the connector's
+to add: spread a `discoverFields` result to set `samples` or `sourceColumn`.
 
 **`serve(connector, { token, port?, hostname? })`**: boots the HTTP server;
 returns `{ app, url, stop }`. Boot-fails on a token under 32 chars or an
-invalid capability doc, warns when advertised endpoints and overridden methods
-disagree, and logs which profiling methods still scan through `query()`.
-`createApp(connector, { token })` returns the Elysia app for tests and
-embedding.
+invalid capability doc. `createApp(connector, { token })` returns the Elysia
+app for tests and embedding.
 
 **Errors and http**: `ConnectorError` plus the constructors `badRequest`,
 `unauthorized`, `unknownEntity`, `unsupported`, `timeout`; `parseBody`
 (400 envelope, never 422), `withTimeout` (408 on expiry), `bearerGuard`
-(timing-safe compare), `ndjsonStream` (heartbeats, `{rows}`/`{ping}`/
+(timing-safe compare), `ndjsonStream` (heartbeats, `{served}`/`{rows}`/`{ping}`/
 `{error}`/`{end:1}` framing).
 
 **Kit**: `applyFilters(rows, { and, or? }, fieldTypes?)` evaluates filters in
 memory with the SQL engine's exact semantics (`nin` keeps nulls, empty `in`
-matches nothing, ...). `assertKnownFields(req, fields)` raises the 422.
-`columnCountsFromValues`, `linkFromValues`, `grainFromValues`,
-`sampleFromValues` compute probe answers from fetched values;
-`NEAR_UNIQUE_MIN_SHARE`, `DUP_SAMPLE_CAP`, `ORPHAN_SAMPLE_CAP` are the
-protocol's tuning constants.
+matches nothing, ...), over `byteOrderCompare` and `decimalCompare`, which are
+exported for a connector that orders rows itself. `assertKnownFields(req,
+fields)` rejects unknown filter, projection, and sort fields with 422 before
+fetching rows and returns their validated `Set<string>` for upstream field
+selection. `windowRows(batches, req)` applies offset and limit to
+already-filtered batches, emits at most 5000 rows per batch, and closes the
+source iterator on early exit. Sort before windowing when requested; project
+afterward. Only sorting needs whole-result buffering, and pagination and
+deadline checks stay with the connector.
+`defineCapability(...)` emits the capability doc from a `Pushdown` map plus the
+vendor block; `pushdownCapabilities` is the emitter alone and
+`pushedOps(map, entity, field?)` is what `query()` asks before it builds an
+upstream request, so the doc and the request cannot drift.
+`cardinalityFromValues` and `linkFromValues` compute measurement answers from
+fetched values; `columnTally` is the streaming twin of the first, folding
+batches into a group map instead of holding the column. `ORPHAN_SAMPLE_CAP`
+bounds the orphan spellings a link answer names.
 
 ### `@futurity/atlas-connector/sql`
 
@@ -205,22 +282,24 @@ protocol's tuning constants.
 `catalog`, `schema`, and `flavor`. Pools are cached per credential set (LRU,
 16 tenants) and an evicted pool closes only after the last request holding it
 returns. Optional `streamBatches` override for drivers with real cursors;
-`enforcesDeclaredKeys = true` only when every declared key is a real db
-constraint. `capability()` derives the doc; override `credentialSchema` when
-the driver takes separate parts instead of one url, keeping a `placeholder` and
-a `help` string on each part.
+`keysEnforced = true` only when every declared key is a real db constraint.
+`capabilities()` derives the doc; override `credentialSchema` when the driver
+takes separate parts instead of one url, keeping a `placeholder` and a `help`
+string on each part.
 
 **Catalog**: `defineCatalog(tables)`, `col(name, wire, type, opts?)`, and the
-`Catalog`/`Table`/`Column`/`CatalogForeignKey`/`WireKind` types.
+`Catalog`/`Table`/`Column`/`WireKind` types. `defineCatalog` is re-exported from
+the core catalog, and `Column` extends core `Field` with SQL storage metadata.
 
 **`SqlFlavor`**: the dialect seam (placeholders, ident quoting, date
-rendering, collation pins). v1 ships `postgres()`; other dialects land here.
+rendering, collation pins). It ships `postgres()`; other dialects land here.
 
 **Builders**: `buildSelect`, `buildCount`, `buildAggregate`, `buildWhere`,
 `renderRows`, `renderAggregateRows`, `projectExpression`, `renderValue`,
-`Binder`, plus the probe/discovery SQL and `sqlCapability`. Protocol law
-(null ordering, empty-`in`, LIKE escaping, 2^53 fencing, decline-vs-wrong-
-answer for aggregates) is hardcoded; only spellings go through the flavor.
+`Binder`, plus the measurement/discovery SQL (`size`, `cardinality`,
+`linkHitRate`) and `sqlCapability`. Protocol law (null ordering, empty-`in`,
+LIKE escaping, 2^53 fencing, decline-vs-wrong-answer for aggregates) is
+hardcoded; only spellings go through the flavor.
 
 ## License
 

@@ -1,6 +1,8 @@
+// one SELECT per SourceQuery: filters, sort and window all render into the same statement
+
+import { badRequest } from "../serve/errors";
 import type { SourceQueryWire } from "../wire/schemas";
 import type { SourceRow } from "../wire/vocabulary";
-import { badRequest } from "../serve/errors";
 import type { Column, Table } from "./catalog";
 import { Binder, buildWhere } from "./filters";
 import type { SqlContext } from "./flavor";
@@ -9,7 +11,7 @@ import { projectExpression, renderValue } from "./values";
 
 export type ProjectedColumn = { key: string; expr: string; column: Column };
 
-// projectExpression quotes only the bare column, so an aliased hop field re-qualifies it
+// projectExpression quotes the bare column, so a hop field re-qualifies it under its alias
 function aliasedProjection(ctx: SqlContext, alias: string, column: Column): string {
   const quoted = ctx.flavor.quoteIdent(column.name);
   const bare = projectExpression(ctx.flavor, column.name, column.wire);
@@ -26,20 +28,16 @@ function buildProjection(
 
   for (const field of query.fields) {
     const column = requireColumn(base, field);
-    projected.push({
-      key: field,
-      expr: aliasedProjection(ctx, "t0", column),
-      column,
-    });
+    projected.push({ key: field, expr: aliasedProjection(ctx, "t0", column), column });
   }
 
   for (const join of query.joins ?? []) {
     const alias = aliases.get(join.toTable);
-    const target = requireTable(ctx, join.toTable);
     if (!alias) throw badRequest(`join '${join.toTable}' was not aliased`);
-    for (const jf of join.fields) {
-      const column = requireColumn(target, jf.field);
-      const key = jf.as ?? jf.field;
+    const target = requireTable(ctx, join.toTable);
+    for (const hopField of join.fields) {
+      const column = requireColumn(target, hopField.field);
+      const key = hopField.as ?? hopField.field;
       projected.push({ key, expr: aliasedProjection(ctx, alias, column), column });
     }
   }
@@ -52,8 +50,8 @@ function buildOrderBy(ctx: SqlContext, query: SourceQueryWire, base: Table): str
   if (query.sort.length === 0) return "";
   const terms = query.sort.map((sort) => {
     const column = requireColumn(base, sort.field);
-    const c = `t0.${ctx.flavor.quoteIdent(column.name)}`;
-    const ordered = sort.collate && column.type === "string" ? ctx.flavor.bytePin(c) : c;
+    const bare = `t0.${ctx.flavor.quoteIdent(column.name)}`;
+    const ordered = sort.collate && column.type === "string" ? ctx.flavor.bytePin(bare) : bare;
     const direction = sort.dir === "asc" ? "ASC" : "DESC";
     return `${ordered} ${direction} NULLS LAST`;
   });
@@ -67,36 +65,28 @@ function buildWindow(query: SourceQueryWire): string {
   return clauses.join(" ");
 }
 
-// SourceQuery → one SELECT, plus the column list needed to render every row's wire values
 export function buildSelect(
   ctx: SqlContext,
   query: SourceQueryWire,
-): {
-  sql: string;
-  params: unknown[];
-  columns: ProjectedColumn[];
-} {
+): { sql: string; params: unknown[]; columns: ProjectedColumn[] } {
   const base = requireTable(ctx, query.table);
   const binder = new Binder(ctx.flavor);
   const { from, aliases } = buildFrom(ctx, query, base);
   const columns = buildProjection(ctx, query, base, aliases);
   const where = buildWhere(ctx, base, query.and, query.or, binder);
-  const select = columns.map((c) => `${c.expr} AS ${ctx.flavor.quoteIdent(c.key)}`).join(", ");
+  const selection = columns.map((c) => `${c.expr} AS ${ctx.flavor.quoteIdent(c.key)}`).join(", ");
+
   const parts = [
-    `SELECT ${select}`,
+    `SELECT ${selection}`,
     `FROM ${from}`,
     where,
     buildOrderBy(ctx, query, base),
     buildWindow(query),
   ];
-  return {
-    sql: parts.filter(Boolean).join(" "),
-    params: binder.params,
-    columns,
-  };
+  const sql = parts.filter(Boolean).join(" ");
+  return { sql, params: binder.params, columns };
 }
 
-// count ignores sort/limit/offset/fields — none of them change what matches
 export function buildCount(
   ctx: SqlContext,
   query: Pick<SourceQueryWire, "table" | "and" | "or">,

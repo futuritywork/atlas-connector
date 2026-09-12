@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { AtlasJson } from "../wire/atlas-json";
 import { OPS } from "../wire/vocabulary";
 import { sqlCapability } from "./capability";
-import { type Column, defineCatalog, type Table } from "./catalog";
+import { col, type Column, defineCatalog, type Table } from "./catalog";
 import { postgres, type SqlFlavor } from "./flavor";
+
+const OPS_SANS_CONTAINS = OPS.filter((op) => op !== "contains");
 
 // the real flavor, with the optional contains spelling stripped unless asked for
 const pgFlavor = (opts?: { arrayContains?: boolean }): SqlFlavor => {
@@ -11,16 +13,6 @@ const pgFlavor = (opts?: { arrayContains?: boolean }): SqlFlavor => {
   if (!opts?.arrayContains) delete flavor.arrayContains;
   return flavor;
 };
-
-const column = (name: string, wire: Column["wire"], over?: Partial<Column>): Column => ({
-  name,
-  wire,
-  type: "string",
-  nullable: true,
-  unique: false,
-  description: "",
-  ...over,
-});
 
 const tableOf = (name: string, columns: Column[]): Table => ({
   name,
@@ -30,20 +22,23 @@ const tableOf = (name: string, columns: Column[]): Table => ({
   columns,
 });
 
-const scalarCatalog = defineCatalog([tableOf("orders", [column("id", "int"), column("status", "text")])]);
-const arrayCatalog = defineCatalog([tableOf("orders", [column("id", "int"), column("tags", "text_array")])]);
+const scalarCatalog = defineCatalog([
+  tableOf("orders", [col("id", "int", "number"), col("status", "text", "string")]),
+]);
+
+const arrayCatalog = defineCatalog([
+  tableOf("orders", [col("id", "int", "number"), col("tags", "text_array", "array")]),
+]);
 
 const capability = (over?: Partial<Parameters<typeof sqlCapability>[0]>) =>
   sqlCapability({
     slug: "test-connector",
     catalog: scalarCatalog,
     flavor: pgFlavor({ arrayContains: true }),
-    enforcesDeclaredKeys: false,
+    keysEnforced: false,
     credentialSchema: [{ key: "databaseUrl", label: "Database URL", type: "password", required: true }],
     ...over,
   });
-
-const OPS_SANS_CONTAINS = OPS.filter((op) => op !== "contains");
 
 describe("sqlCapability operator derivation", () => {
   test("drops contains when no column is a text_array", () => {
@@ -62,17 +57,13 @@ describe("sqlCapability operator derivation", () => {
 });
 
 describe("sqlCapability doc shape", () => {
-  test("derived doc parses under the wire AtlasJson schema", () => {
-    const doc = capability();
+  test("derived doc parses under the wire AtlasJson schema once serve() fills endpoints", () => {
+    const doc = { ...capability(), endpoints: [] };
     expect(AtlasJson.parse(doc)).toEqual(doc);
   });
 
   test("serves the native profile: no dialect key", () => {
     expect("dialect" in capability()).toBe(false);
-  });
-
-  test("advertises the aggregate endpoint", () => {
-    expect(capability().endpoints).toEqual(["aggregate"]);
   });
 
   test("carries the credential inputs the tenant is asked for", () => {
@@ -81,10 +72,10 @@ describe("sqlCapability doc shape", () => {
     ]);
   });
 
-  test("threads slug and enforcesDeclaredKeys", () => {
-    const doc = capability({ slug: "my-crm", enforcesDeclaredKeys: true });
+  test("threads slug and keysEnforced", () => {
+    const doc = capability({ slug: "my-crm", keysEnforced: true });
     expect(doc.slug).toBe("my-crm");
-    expect(doc.capabilities.enforcesDeclaredKeys).toBe(true);
+    expect(doc.capabilities.keysEnforced).toBe(true);
   });
 
   test("derives the fixed sql flags", () => {
@@ -92,16 +83,12 @@ describe("sqlCapability doc shape", () => {
     expect(caps.dateBucket).toBe(true);
     expect(caps.sort).toBe("multi");
     expect(caps.offset).toBe(true);
-    expect(caps.count).toBe("server");
     expect(caps.join).toBe(true);
-    expect(caps.probeConcurrency).toBe(4);
-    expect(caps.cheapProbes).toBe(false);
+    expect(caps.limits).toEqual({ concurrency: 4 });
   });
 
-  test("overrides win over derived flags", () => {
-    const doc = capability({ overrides: { sort: "single", probeConcurrency: 2 } });
-    expect(doc.capabilities.sort).toBe("single");
-    expect(doc.capabilities.probeConcurrency).toBe(2);
-    expect(doc.capabilities.offset).toBe(true);
+  test("a driver's own ceilings fold into the limits block", () => {
+    const doc = capability({ limits: { pageSizeMax: 1000, concurrency: 1 } });
+    expect(doc.capabilities.limits).toEqual({ pageSizeMax: 1000, concurrency: 1 });
   });
 });

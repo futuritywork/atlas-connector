@@ -1,21 +1,24 @@
 import {
-  applyFilters,
   assertKnownFields,
   AtlasConnector,
-  badRequest,
   CONNECTOR_LIMITS,
+  defineCatalog,
   unknownEntity,
   unsupported,
-  type AtlasType,
+  windowRows,
   type CheckRequest,
   type CountRequest,
   type DiscoveryAnswer,
   type DiscoveryRequest,
+  type EntitySize,
   type NativeQueryRequest,
+  type QueryChunk,
+  type SizeRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
-import { ATLAS_JSON } from "./capability";
+import { CAPABILITY } from "./capability";
 import { ESB_CORE_CATALOG } from "./catalog";
+import { EsbCoreApi, makeDeadline, type Deadline } from "./esb-api";
 import {
   discoveryWarning,
   isOmittableDiscoveryError,
@@ -25,25 +28,41 @@ import {
   toInaccessibleVerdict,
   type AvailabilityVerdict,
 } from "./helpers/discovery";
-import {
-  collectNeededColumns,
-  projectRows,
-  sortRows,
-  type QueryShape,
-} from "./helpers/query";
-import { EsbFilterSet } from "./schemas";
+import { controlFilters, honoredFilters, rememberHonoredFilters } from "./helpers/negative-control";
+import { planQuery, type QueryPlan } from "./helpers/pushdown";
 import type { EsbCoreObject } from "./types";
-import { EsbCoreApi, makeDeadline, type Deadline } from "./esb-api";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 1_000;
 const MAX_PAGES = 20_000;
+
+type PageJump = { firstPage: number; drop: number }; // drop = rows of firstPage the offset already consumed
+
+function projectRows(rows: SourceRow[], fields: string[]): SourceRow[] {
+  return rows.map((row) => {
+    const selected: SourceRow = {};
+    for (const field of fields) selected[field] = row[field] ?? null;
+    return selected;
+  });
+}
+
+// only an exactly-answered request may read just its window
+function pageSizeFor(object: EsbCoreObject, req: NativeQueryRequest, windowed: boolean): number {
+  const full = object.pageSize ?? PAGE_SIZE;
+  if (!windowed || req.limit === undefined) return full;
+  return Math.min(full, (req.offset ?? 0) + req.limit);
+}
+
+function pageJumpFor(req: NativeQueryRequest, pageSize: number): PageJump {
+  const offset = req.offset ?? 0;
+  return { firstPage: Math.floor(offset / pageSize) + 1, drop: offset % pageSize };
+}
 
 export class EsbCoreConnector extends AtlasConnector {
   readonly slug = "esb-core";
-  private readonly objectsByName = new Map(ESB_CORE_CATALOG.map((object) => [object.name, object]));
+  private readonly catalog = defineCatalog(ESB_CORE_CATALOG);
 
-  capability() {
-    return ATLAS_JSON;
+  capabilities() {
+    return CAPABILITY;
   }
 
   async check(req: CheckRequest): Promise<void> {
@@ -51,39 +70,28 @@ export class EsbCoreConnector extends AtlasConnector {
   }
 
   private objectFor(table: string): EsbCoreObject {
-    const object = this.objectsByName.get(table);
+    const object = this.catalog.getTable(table);
     if (!object) throw unknownEntity(`unknown table "${table}"`);
     return object;
   }
 
-  private fieldTypes(object: EsbCoreObject): ReadonlyMap<string, AtlasType> {
-    return new Map(object.columns.map((column) => [column.name, column.type]));
-  }
-
-  private validate(req: QueryShape, object: EsbCoreObject): void {
-    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
-    const fieldTypes = this.fieldTypes(object);
-    assertKnownFields(req, fieldTypes.keys());
-    for (const field of req.fields) {
-      if (!fieldTypes.has(field)) throw unsupported(`unknown requested field '${field}' on ${object.name}`);
-    }
-    for (const sort of req.sort ?? []) {
-      if (!fieldTypes.has(sort.field)) throw unsupported(`unknown sort field '${sort.field}' on ${object.name}`);
-    }
-  }
-
-  private async *scan(
+  private async *walk(
     api: EsbCoreApi,
-    req: QueryShape,
+    object: EsbCoreObject,
+    request: { plan: QueryPlan; fields: string[]; pageSize: number; jump: PageJump },
     deadline: Deadline,
   ): AsyncIterable<SourceRow[]> {
-    const object = this.objectFor(req.table);
-    this.validate(req, object);
-    const fields = [...collectNeededColumns(req, object)];
-    for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const { plan, fields, pageSize, jump } = request;
+    let drop = jump.drop;
+    for (let walked = 0; walked < MAX_PAGES; walked += 1) {
       deadline.check();
-      const result = await api.collection(object, page, PAGE_SIZE, deadline, fields);
-      const rows = projectRows(result.rows, fields);
+      const result = await api.collection(
+        object,
+        { page: jump.firstPage + walked, limit: pageSize, params: plan.params, fields },
+        deadline,
+      );
+      const rows = projectRows(result.rows, fields).slice(drop);
+      drop = 0;
       for (let index = 0; index < rows.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
         deadline.check();
         yield rows.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch);
@@ -93,67 +101,59 @@ export class EsbCoreConnector extends AtlasConnector {
     throw new Error(`esb-core: ${object.name} exceeded ${MAX_PAGES} pages; the page walk would be truncated`);
   }
 
-  private async *scanFiltered(
-    api: EsbCoreApi,
-    req: QueryShape,
-    deadline: Deadline,
-  ): AsyncIterable<SourceRow[]> {
+  // an unmapped field, an or-group, a substring param or an unsortable column leaves a superset
+  async *query(req: NativeQueryRequest): AsyncIterable<QueryChunk> {
     const object = this.objectFor(req.table);
-    const fieldTypes = Object.fromEntries(this.fieldTypes(object));
-    const parsedFilters = EsbFilterSet(fieldTypes).safeParse({ and: req.and, or: req.or });
-    if (!parsedFilters.success) throw badRequest("filter values do not match the ESB Core catalog types");
-    for await (const batch of this.scan(api, req, deadline)) {
-      deadline.check();
-      const filtered = applyFilters(batch, parsedFilters.data, fieldTypes);
-      deadline.check();
-      yield filtered;
-    }
-  }
+    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; Atlas joins locally");
+    const needed = assertKnownFields(req, object.columns.map((column) => column.name));
+    if (object.primaryKey) needed.add(object.primaryKey);
 
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
     const api = new EsbCoreApi(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
-    const offset = req.offset ?? 0;
-    if (req.sort.length > 0 || offset > 0) {
-      const rows: SourceRow[] = [];
-      for await (const batch of this.scanFiltered(api, req, deadline)) rows.push(...batch);
+    const plan = planQuery(object, req, honoredFilters(req.credentials));
+    yield { served: plan.served };
+
+    const pageSize = pageSizeFor(object, req, plan.served.window);
+    // only a numbered page can be jumped to
+    const jumped = plan.served.window && object.mode === "paged";
+    const jump = jumped ? pageJumpFor(req, pageSize) : { firstPage: 1, drop: 0 };
+    const pages = this.walk(api, object, { plan, fields: [...needed], pageSize, jump }, deadline);
+
+    const offset = jumped ? 0 : req.offset;
+    const windowed = plan.served.window ? windowRows(pages, { offset, limit: req.limit }) : pages;
+    for await (const batch of windowed) {
       deadline.check();
-      const object = this.objectFor(req.table);
-      const fieldTypes = this.fieldTypes(object);
-      sortRows(rows, req.sort, fieldTypes);
-      const end = req.limit === undefined ? undefined : offset + req.limit;
-      const window = rows.slice(offset, end);
-      for (let index = 0; index < window.length; index += CONNECTOR_LIMITS.rowsPerBatch) {
-        deadline.check();
-        yield projectRows(window.slice(index, index + CONNECTOR_LIMITS.rowsPerBatch), req.fields);
-      }
-      return;
-    }
-
-    let remaining = req.limit ?? Number.POSITIVE_INFINITY;
-    for await (const batch of this.scanFiltered(api, req, deadline)) {
-      const capped = batch.length > remaining ? batch.slice(0, remaining) : batch;
-      remaining -= capped.length;
-      if (capped.length > 0) yield projectRows(capped, req.fields);
-      if (remaining <= 0) return;
+      yield projectRows(batch, req.fields);
     }
   }
 
-  async count(req: CountRequest): Promise<number> {
+  // `count` on a paged response is the whole filtered collection, so limit=1 answers it
+  override async count(req: CountRequest): Promise<number> {
+    const object = this.objectFor(req.table);
+    assertKnownFields(req, object.columns.map((column) => column.name));
+    const plan = planQuery(object, { ...req, sort: [] }, honoredFilters(req.credentials));
+    if (!plan.served.filters) throw unsupported(`esb-core: ${object.name} cannot count this filter upstream`);
+
     const api = new EsbCoreApi(req.credentials);
-    const deadline = makeDeadline(req.timeoutMs);
-    const shape: QueryShape = {
-      table: req.table,
-      and: req.and,
-      or: req.or,
-      fields: [],
-    };
-    let count = 0;
-    for await (const batch of this.scanFiltered(api, shape, deadline)) count += batch.length;
-    return count;
+    const head = await api.collection(
+      object,
+      { page: 1, limit: 1, params: plan.params, fields: [] },
+      makeDeadline(req.timeoutMs),
+    );
+    if (object.mode === "direct") return head.rows.length;
+    if (head.count === undefined) throw unsupported(`esb-core: ${object.name} answered without a count`);
+    return head.count;
   }
 
-  async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+  override async size(req: SizeRequest): Promise<EntitySize | null> {
+    const object = this.objectFor(req.table);
+    const api = new EsbCoreApi(req.credentials);
+    const head = await api.collection(object, { page: 1, limit: 1, fields: [] }, makeDeadline(req.timeoutMs));
+    if (object.mode === "direct") return { rows: head.rows.length, exact: true };
+    return head.count === undefined ? null : { rows: head.count, exact: true };
+  }
+
+  async discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
     const api = new EsbCoreApi(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
     await api.authenticate(deadline);
@@ -163,8 +163,10 @@ export class EsbCoreConnector extends AtlasConnector {
     const probe = async (object: EsbCoreObject): Promise<void> => {
       if (fatal !== undefined) throw fatal;
       try {
-        await api.collection(object, 1, 1, deadline);
-        verdicts.set(object, { object, accessible: true });
+        // the availability probe doubles as the row count
+        const head = await api.collection(object, { page: 1, limit: 1 }, deadline);
+        const rowCount = object.mode === "direct" ? head.rows.length : head.count;
+        verdicts.set(object, { object, accessible: true, ...(rowCount === undefined ? {} : { rowCount }) });
       } catch (error) {
         if (isOmittableDiscoveryError(error)) {
           verdicts.set(object, toInaccessibleVerdict(object, error));
@@ -189,14 +191,20 @@ export class EsbCoreConnector extends AtlasConnector {
       if (!verdict) throw new Error(`esb-core: availability probe produced no verdict for ${object.name}`);
       return verdict;
     });
-    const objects = ordered.flatMap((verdict) => (verdict.accessible ? [verdict.object] : []));
-    if (objects.length === 0) throw new Error("esb-core: no readable collection endpoints were discovered");
-    const warnings = ordered.flatMap((verdict) => {
-      const warning = discoveryWarning(verdict);
-      return warning ? [warning] : [];
-    });
+    const available = ordered.flatMap((verdict) => (verdict.accessible ? [verdict] : []));
+    if (available.length === 0) throw new Error("esb-core: no readable collection endpoints were discovered");
+
+    const ignored = await controlFilters(api, available, PROBE_CONCURRENCY, deadline);
+    rememberHonoredFilters(req.credentials, available, ignored);
+    const warnings = [
+      ...ordered.flatMap((verdict) => {
+        const warning = discoveryWarning(verdict);
+        return warning ? [warning] : [];
+      }),
+      ...ignored.map((entry) => entry.warning),
+    ];
     return {
-      tables: objects.map(toDiscoveredTable),
+      tables: available.map((verdict) => toDiscoveredTable(verdict.object, verdict.rowCount)),
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }

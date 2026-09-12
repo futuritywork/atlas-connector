@@ -7,4 +7,5 @@ const { url } = serve(new BrightlineConnector(), {
   port: CONFIG.port,
 });
 
+process.send?.(url);
 console.log(`brightline connector on ${url} (schema '${CONFIG.schema}'; each request brings its own database url)`);
