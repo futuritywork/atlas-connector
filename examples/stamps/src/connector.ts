@@ -2,40 +2,35 @@ import {
   applyFilters,
   assertKnownFields,
   AtlasConnector,
-  ConnectorError,
+  defineCapability,
   defineCatalog,
   discoverFields,
   field,
   fieldTypes,
-  OPS,
   unknownEntity,
   unsupported,
   windowRows,
-  type AtlasJson,
+  type CapabilityDoc,
   type CheckRequest,
-  type Field,
   type DiscoveredTable,
   type DiscoveryAnswer,
   type DiscoveryRequest,
+  type EntitySize,
+  type Field,
   type NativeQueryRequest,
+  type QueryChunk,
+  type SizeRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
 import { StampsClient, type Store, type Reward } from "./stamps-api";
 
-const ATLAS_JSON: AtlasJson = {
-  protocolVersion: 1,
+// the v4 api filters and sorts nothing, so the pushdown map is empty and Atlas narrows these tables
+const ATLAS_JSON: CapabilityDoc = defineCapability({
   slug: "stamps",
-  capabilities: {
-    operators: [...OPS],
-    dateBucket: false,
-    sort: "none",
-    offset: false,
-    count: "scan",
-    join: false,
-    enforcesDeclaredKeys: false,
-    probeConcurrency: 2,
-    cheapProbes: false,
-  },
+  pushdown: {},
+  limits: { pageSizeMax: 100, concurrency: 1 },
+  keysEnforced: false,
+  dateBucket: false,
   credentialSchema: [
     {
       key: "merchantToken",
@@ -54,8 +49,7 @@ const ATLAS_JSON: AtlasJson = {
       help: "Optional Stamps staging host. Leave blank for `https://staging-crm2.stamps.id`; the secondary `https://staging-crm.stamps.id` host is also accepted.",
     },
   ],
-  endpoints: [],
-};
+});
 
 const catalog = defineCatalog([
   {
@@ -110,21 +104,13 @@ function tableOf(name: string) {
 }
 
 function project(row: SourceRow, fields: string[]): SourceRow {
-  return Object.fromEntries(
-    fields.map((name) => {
-      const value = row[name];
-      if (value === undefined) {
-        throw new ConnectorError(500, `Stamps row is missing declared field "${name}"`);
-      }
-      return [name, value];
-    }),
-  );
+  return Object.fromEntries(fields.map((name) => [name, row[name]]));
 }
 
 export class StampsConnector extends AtlasConnector {
   readonly slug = ATLAS_JSON.slug;
 
-  capability() {
+  capabilities() {
     return ATLAS_JSON;
   }
 
@@ -136,32 +122,42 @@ export class StampsConnector extends AtlasConnector {
     const table = tableOf(req.table);
     const types = fieldTypes(table.columns);
     assertKnownFields(req, Object.keys(types));
-    if (req.sort.length > 0 || (req.offset ?? 0) > 0 || (req.joins?.length ?? 0) > 0) {
-      throw unsupported("sorting, offsets, and joins are not supported");
-    }
+    if (req.joins?.length) throw unsupported("joins are not supported; Atlas joins locally");
     const client = new StampsClient(req.credentials, req.timeoutMs);
-    const batches = table.name === "stores" ? [await client.listStores()] : client.listRewards();
-    for await (const batch of batches) {
-      yield applyFilters(batch, req, types);
+    const pages = table.name === "stores" ? [await client.listStores()] : client.listRewards();
+    for await (const page of pages) {
+      yield applyFilters(page, req, types);
     }
   }
 
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
-    for await (const batch of windowRows(this.scan(req), req)) {
+  // the api narrows nothing and has no order to ask for, so every predicate runs here
+  async *query(req: NativeQueryRequest): AsyncIterable<QueryChunk> {
+    const sortRequested = req.sort.length > 0;
+    yield { served: { filters: true, sort: false, window: !sortRequested } };
+    const filtered = this.scan(req);
+    const rows = sortRequested ? filtered : windowRows(filtered, req);
+    for await (const batch of rows) {
       yield batch.map((row) => project(row, req.fields));
     }
   }
 
-  async discover(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+  // /stores/ answers its whole index in one request; rewards only pages, so Atlas owns that walk
+  override async size(req: SizeRequest): Promise<EntitySize | null> {
+    if (tableOf(req.table).name !== "stores") return null;
+    const stores = await new StampsClient(req.credentials, req.timeoutMs).listStores();
+    return { rows: stores.length, exact: true };
+  }
+
+  async discovery(_req: DiscoveryRequest): Promise<DiscoveryAnswer> {
     const tables: DiscoveredTable[] = catalog.tables.map(({ name, columns }) => ({
       name,
       sourceDescription: `Stamps API v4 ${name}`,
       storesRows: true,
       primaryKey: ["id"],
       foreignKeys: [],
-      fields: discoverFields(columns).map((field) => ({
-        ...field,
-        sourceDescription: `Stamps API v4 ${name}.${field.name}`,
+      fields: discoverFields(columns).map((column) => ({
+        ...column,
+        sourceDescription: `Stamps API v4 ${name}.${column.name}`,
       })),
     }));
     return { tables };

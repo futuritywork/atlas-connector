@@ -1,4 +1,4 @@
-# Brightline CRM — reference Atlas external connector
+# Brightline CRM: reference Atlas external connector
 
 The worked example a connector author copies from. It is backed by Postgres, which is the
 point: a SQL-shaped source declares its catalog, opens a pool from the tenant's credentials,
@@ -10,7 +10,7 @@ The whole connector is four small files:
 ```
 src/
   env.ts        # config surface (port, schema, token); no database url, that is a credential
-  catalog.ts    # the CRM schema as defineCatalog(...) — names, types, keys, FK edges
+  catalog.ts    # the CRM schema as defineCatalog(...): names, types, keys, FK edges
   connector.ts  # class BrightlineConnector extends SqlConnector: openPool/run/closePool + a pg cursor stream
   index.ts      # serve(new BrightlineConnector(), { token, port })
 scripts/
@@ -33,7 +33,7 @@ A small B2B sales CRM in one Postgres schema (`crm`), five tables (~85k rows):
 
 | table      | rows   | planted characteristic                                                                                  |
 | ---------- | ------ | ------------------------------------------------------------------------------------------------------- |
-| owners     | 24     | one declared `UNIQUE` (email) — the constraint key tier                                                 |
+| owners     | 24     | one declared `UNIQUE` (email), the constraint key tier                                                  |
 | companies  | 2,400  | `erp_account_code` cross-source join key; ~40 case-pair names; `domain` near-unique with 6 dup pairs    |
 | contacts   | 14,000 | `email` near-unique blemished (distinct/nonNull ≈ 0.9991); `company_id` ~1.5% orphans with **no** pg FK |
 | deals      | 9,000  | `amount` with scale-spelling twins and one > 2^53 sentinel; clean `company_id` FK                       |
@@ -59,7 +59,7 @@ bun run seed
 bun run start
 ```
 
-Environment: see `.env.example` — every value has a local default.
+Environment: see `.env.example`; every value has a local default.
 
 ## A few live calls
 
@@ -77,6 +77,6 @@ curl -s -H "$TOK" -H "$CT" -X POST $U/check \
 curl -s -H "$TOK" -H "$CT" -X POST $U/count \
   -d "{\"table\":\"deals\",\"and\":[{\"field\":\"stage\",\"op\":\"eq\",\"value\":\"closed_won\"}],\"credentials\":$CREDS,\"timeoutMs\":5000}"
 
-curl -s -H "$TOK" -H "$CT" -X POST $U/probe/columns \
+curl -s -H "$TOK" -H "$CT" -X POST $U/cardinality \
   -d "{\"table\":\"contacts\",\"columns\":[\"email\"],\"credentials\":$CREDS,\"timeoutMs\":15000}"
 ```

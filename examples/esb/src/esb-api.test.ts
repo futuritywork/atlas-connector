@@ -8,12 +8,14 @@ import {
   makeDeadline,
   resetEsbCoreTokenCacheForTests,
 } from "./esb-api";
+import type { EsbCoreObject } from "./types";
 
 const CREDENTIALS = { username: "atlas-reader", password: "private-password" };
-const PRODUCTS = ESB_CORE_CATALOG.find((object) => object.name === "products")!;
-const BRANCHES = ESB_CORE_CATALOG.find((object) => object.name === "branches")!;
-const ITEM_JOURNALS = ESB_CORE_CATALOG.find((object) => object.name === "item_journals")!;
-const PRICELISTS = ESB_CORE_CATALOG.find((object) => object.name === "pricelists")!;
+const object = (name: string): EsbCoreObject => ESB_CORE_CATALOG.find((entry) => entry.name === name)!;
+const PRODUCTS = object("products");
+const BRANCHES = object("branches");
+const ITEM_JOURNALS = object("item_journals");
+const PRICELISTS = object("pricelists");
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -49,6 +51,11 @@ function authHeader(init?: RequestInit): string | null {
   return new Headers(init?.headers).get("authorization");
 }
 
+// a fresh instance per read; only the token cache spares a second login
+function read(entity: EsbCoreObject, timeoutMs = 100) {
+  return new EsbCoreApi(CREDENTIALS).collection(entity, { page: 1, limit: 1 }, makeDeadline(timeoutMs));
+}
+
 describe("ESB Core credentials and token coordination", () => {
   test("uses the fixed production origin, trims only username, and reuses a token", async () => {
     const calls = mockFetch(({ url, init }) => {
@@ -57,8 +64,8 @@ describe("ESB Core credentials and token coordination", () => {
       return envelope({ page: 1, limit: 1, data: [], next: "" });
     });
     const api = new EsbCoreApi({ username: " atlas-reader ", password: "  private password  " });
-    await api.collection(PRODUCTS, 1, 1, makeDeadline(1_000));
-    await api.collection(PRODUCTS, 1, 1, makeDeadline(1_000));
+    await api.collection(PRODUCTS, { page: 1, limit: 1 }, makeDeadline(1_000));
+    await api.collection(PRODUCTS, { page: 1, limit: 1 }, makeDeadline(1_000));
 
     expect(calls.filter((call) => call.url.pathname.endsWith("/auth/login"))).toHaveLength(1);
     expect(calls.every((call) => call.url.origin === ESB_CORE_ORIGIN)).toBe(true);
@@ -88,10 +95,7 @@ describe("ESB Core credentials and token coordination", () => {
       }
       return envelope({ page: 1, limit: 1, data: [], next: "" });
     });
-    await Promise.all([
-      new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(500)),
-      new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(500)),
-    ]);
+    await Promise.all([read(PRODUCTS, 500), read(PRODUCTS, 500)]);
     expect(logins).toBe(1);
   });
 
@@ -144,7 +148,7 @@ describe("ESB Core refresh and authorization", () => {
       expect(authHeader(init)).toBe("Bearer access-2");
       return envelope({ page: 1, limit: 1, data: [], next: "" });
     });
-    await new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(1_000));
+    await read(PRODUCTS, 1_000);
     expect(calls.map((call) => call.url.pathname)).toEqual([
       "/core/auth/login",
       "/core/product/list",
@@ -177,8 +181,8 @@ describe("ESB Core refresh and authorization", () => {
     });
     const api = new EsbCoreApi(CREDENTIALS);
     await Promise.all([
-      api.collection(PRODUCTS, 1, 1, makeDeadline(1_000)),
-      api.collection(PRODUCTS, 1, 1, makeDeadline(1_000)),
+      api.collection(PRODUCTS, { page: 1, limit: 1 }, makeDeadline(1_000)),
+      api.collection(PRODUCTS, { page: 1, limit: 1 }, makeDeadline(1_000)),
     ]);
     expect(refreshes).toBe(1);
     expect(calls.filter((call) => call.url.pathname.endsWith("/auth/login"))).toHaveLength(1);
@@ -190,9 +194,7 @@ describe("ESB Core refresh and authorization", () => {
       if (url.pathname.endsWith("/auth/refresh")) return token("access-2", "refresh-2");
       return failure("EC03100001", 401, "Invalid Token");
     });
-    await expect(
-      new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(1_000)),
-    ).rejects.toThrow(/authentication remained invalid/);
+    await expect(read(PRODUCTS, 1_000)).rejects.toThrow(/authentication remained invalid/);
     expect(calls).toHaveLength(4);
   });
 
@@ -206,9 +208,7 @@ describe("ESB Core refresh and authorization", () => {
       if (url.pathname.endsWith("/auth/refresh")) return failure("EC03500000", 503);
       return failure("EC03100001", 401, "Invalid Token");
     });
-    await expect(
-      new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(1_000)),
-    ).rejects.toThrow(/service unavailable/);
+    await expect(read(PRODUCTS, 1_000)).rejects.toThrow(/service unavailable/);
     expect(logins).toBe(1);
     expect(calls).toHaveLength(3);
   });
@@ -225,7 +225,7 @@ describe("ESB Core refresh and authorization", () => {
         ? failure("EC03100001", 401, "Invalid Token")
         : envelope({ page: 1, limit: 1, data: [], next: "" });
     });
-    await new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(1_000));
+    await read(PRODUCTS, 1_000);
     expect(logins).toBe(2);
   });
 
@@ -235,9 +235,7 @@ describe("ESB Core refresh and authorization", () => {
         ? token("access", "refresh")
         : failure("EC03100001", 403, "Unauthorized to access products"),
     );
-    const error = await new EsbCoreApi(CREDENTIALS)
-      .collection(PRODUCTS, 1, 1, makeDeadline(1_000))
-      .catch((value: unknown) => value);
+    const error = await read(PRODUCTS, 1_000).catch((value: unknown) => value);
     expect(error).toBeInstanceOf(EsbCoreError);
     expect(error).toMatchObject({ failureKind: "permission", status: 403 });
   });
@@ -257,15 +255,11 @@ describe("ESB Core response validation and safe failures", () => {
       if (url.pathname.endsWith(BRANCHES.path)) return envelope([{ branchID: 1 }]);
       return envelope({ page: 1, limit: 1, data: [{ productID: 1 }], next: "next" });
     });
-    expect(await new EsbCoreApi(CREDENTIALS).collection(BRANCHES, 99, 99, makeDeadline(100))).toEqual({
-      rows: [{ branchID: 1 }],
-      hasNext: false,
-    });
-    expect(await new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 100, makeDeadline(100))).toMatchObject({
-      page: 1,
-      limit: 1,
-      hasNext: true,
-    });
+    const api = new EsbCoreApi(CREDENTIALS);
+    const direct = await api.collection(BRANCHES, { page: 99, limit: 99 }, makeDeadline(100));
+    expect(direct).toEqual({ rows: [{ branchID: 1 }], hasNext: false });
+    const paged = await api.collection(PRODUCTS, { page: 1, limit: 100 }, makeDeadline(100));
+    expect(paged).toEqual({ rows: [{ productID: 1 }], hasNext: true });
   });
 
   test("normalizes valid rows and rejects values that contradict the catalog", async () => {
@@ -279,11 +273,11 @@ describe("ESB Core response validation and safe failures", () => {
             next: "",
           }),
     );
-    await expect(new EsbCoreApi(CREDENTIALS).collection(ITEM_JOURNALS, 1, 1, makeDeadline(100))).resolves.toMatchObject({
+    await expect(read(ITEM_JOURNALS)).resolves.toMatchObject({
       rows: [{ itemJournalNum: "IJ-1", itemJournalDate: "2024-01-01T02:00:00.000Z" }],
     });
 
-    for (const [object, row] of [
+    for (const [entity, row] of [
       [PRODUCTS, { productID: true }],
       [PRODUCTS, { productID: "1e-7" }],
       [PRICELISTS, { ID: 1, priceDate: "2024-02-30" }],
@@ -295,9 +289,7 @@ describe("ESB Core response validation and safe failures", () => {
           ? token("access", "refresh")
           : envelope({ page: 1, limit: 1, data: [row], next: "" }),
       );
-      await expect(new EsbCoreApi(CREDENTIALS).collection(object, 1, 1, makeDeadline(100))).rejects.toMatchObject({
-        code: "malformed-response",
-      });
+      await expect(read(entity)).rejects.toMatchObject({ code: "malformed-response" });
     }
   });
 
@@ -309,9 +301,7 @@ describe("ESB Core response validation and safe failures", () => {
           ? token("access", "refresh")
           : envelope({ page: 2, limit: 1, data, next: "" }),
       );
-      await expect(
-        new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(100)),
-      ).rejects.toMatchObject({ code: "non-progressing-page" });
+      await expect(read(PRODUCTS)).rejects.toMatchObject({ code: "non-progressing-page" });
     }
   });
 
@@ -332,9 +322,7 @@ describe("ESB Core response validation and safe failures", () => {
       resetEsbCoreTokenCacheForTests();
       let call = 0;
       mockFetch(() => (call++ === 0 ? token("access", "refresh") : Response.json(body)));
-      await expect(
-        new EsbCoreApi(CREDENTIALS).collection(PRODUCTS, 1, 1, makeDeadline(100)),
-      ).rejects.toBeInstanceOf(EsbCoreError);
+      await expect(read(PRODUCTS)).rejects.toBeInstanceOf(EsbCoreError);
     }
   });
 

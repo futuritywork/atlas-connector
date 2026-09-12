@@ -1,14 +1,26 @@
 import { field } from "@futurity/atlas-connector";
 import type { EsbCoreObject } from "./types";
 
-// ESB Core API 2.0.0 publishes these read-only collection contracts at developers.esb.co.id/esb-core/api_data.json.
+// the read-only collection contracts of ESB Core API 2.0.0
+// the apidoc names params the endpoint ignores, so `filters` and `sortFields` are measured per tenant
 export const ESB_CORE_CATALOG: EsbCoreObject[] = [
   {
     name: "advance_payments",
     path: "/purchase/advance-payment",
     description: "Advance payments",
     mode: "paged",
+    pageSize: 500, // latency budget, not a cap: ~1.2s per 700 rows
     primaryKey: "advancePaymentNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "advancePaymentDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "advancePaymentNum", param: "advancePaymentNum", ops: ["eq"], superset: true },
+      { field: "branchID", param: "branchIDs", ops: ["eq", "in"] },
+      { field: "currencyID", param: "currencyID", ops: ["eq"] },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "supplierID", param: "supplierIDs", ops: ["eq", "in"] },
+    ],
+    sortFields: ["advancePaymentNum", "advancePaymentDate", "branchName", "purchaseNum", "paymentTotal", "usedAdvanceTotal", "statusID", "statusName", "createdBy"],
     columns: [
       field("advancePaymentNum", "string", { nullable: false, unique: true, description: "Advance Payment Number" }),
       field("advancePaymentDate", "date", { nullable: true, description: "Advance Payment Date" }),
@@ -35,6 +47,17 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Budget adjustments",
     mode: "paged",
     primaryKey: "budgetAdjustmentNum",
+    filters: [
+      { field: "adjustmentType", param: "adjustmentType", ops: ["eq"], superset: true },
+      { field: "branch", param: "branch", ops: ["eq"], superset: true },
+      { field: "budgetAdjustmentNum", param: "budgetAdjustmentNum", ops: ["eq"], superset: true },
+      { field: "budgetNum", param: "budgetNum", ops: ["eq"], superset: true },
+      { field: "coaNo", param: "coa", ops: ["eq"], superset: true },
+      { field: "costCenter", param: "costCenter", ops: ["eq"], superset: true },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "transactionDate", param: "transactionDate", ops: ["eq"] },
+    ],
     columns: [
       field("budgetAdjustmentNum", "string", { nullable: false, unique: true, description: "Budget Adjustment Number" }),
       field("budgetNum", "string", { nullable: true, description: "Budget Number" }),
@@ -55,6 +78,13 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Budget allocations",
     mode: "paged",
     primaryKey: "budgetAdjustmentNum",
+    filters: [
+      { field: "budgetAdjustmentNum", param: "budgetAdjustmentNum", ops: ["eq"], superset: true },
+      { field: "budgetNum", param: "budgetNum", ops: ["eq"], superset: true },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "transactionDate", param: "transactionDate", ops: ["eq"] },
+    ],
     columns: [
       field("budgetAdjustmentNum", "string", { nullable: false, unique: true, description: "Budget Allocate Number" }),
       field("budgetNum", "string", { nullable: true, description: "Budget Number" }),
@@ -70,6 +100,15 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Budgets",
     mode: "paged",
     primaryKey: "budgetNum",
+    filters: [
+      { field: "budgetNum", param: "budgetNum", ops: ["eq"], superset: true },
+      { field: "budgetPlanNum", param: "budgetPlanNum", ops: ["eq"], superset: true },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "endPeriod", param: "endPeriod", ops: ["eq"], superset: true },
+      { field: "periodTypeID", param: "periodTypeID", ops: ["eq"] },
+      { field: "startPeriod", param: "startPeriod", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
     columns: [
       field("budgetNum", "string", { nullable: false, unique: true, description: "Budget Number" }),
       field("budgetPlanNum", "string", { nullable: true, description: "Budget Plan Number" }),
@@ -90,6 +129,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Budget plans",
     mode: "paged",
     primaryKey: "budgetPlanNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "budgetPlanName", param: "budgetPlanName", ops: ["eq"], superset: true },
+      { field: "budgetPlanNum", param: "budgetPlanNum", ops: ["eq"], superset: true },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "periodTypeID", param: "periodTypeID", ops: ["eq"] },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
     columns: [
       field("budgetPlanNum", "string", { nullable: false, unique: true, description: "Budget Plan Number" }),
       field("budgetPlanName", "string", { nullable: true, description: "Budget Plan Name" }),
@@ -110,6 +157,16 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Employee advance payments",
     mode: "paged",
     primaryKey: "employeeAdvanceNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "currencyID", param: "currencyID", ops: ["eq"] },
+      { field: "dueDay", param: "dueDay", ops: ["eq"] },
+      { field: "employeeAdvanceDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "employeeAdvanceNum", param: "employeeAdvanceNum", ops: ["eq"], superset: true },
+      { field: "employeeCode", param: "employeeCode", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
     columns: [
       field("employeeAdvanceNum", "string", { nullable: false, unique: true, description: "Advance payment number with EA prefix" }),
       field("employeeAdvanceDate", "date", { nullable: true, description: "Advance payment date" }),
@@ -133,8 +190,15 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/inventory/goods-delivery",
     description: "Goods deliveries",
     mode: "paged",
+    filters: [
+      { field: "destinationBranchID", param: "destinationBranchIDs", ops: ["eq", "in"] },
+      { field: "goodsDeliveryDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "originBranchID", param: "originBranchIDs", ops: ["eq", "in"] },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["goodsDeliveryNum", "goodsDeliveryDate", "transType", "originBranchName", "statusName"],
     columns: [
-      field("goodsDeliveryNum", "string", { nullable: true, description: "Goods Delivery Number" }),
+      field("goodsDeliveryNum", "string", { nullable: true, description: "Goods Delivery Number" }), // null until authorisation, so neither key nor unique
       field("goodsDeliveryDate", "date", { nullable: true, description: "Goods Delivery Date" }),
       field("transType", "string", { nullable: true, description: "Transaction Type" }),
       field("referenceNumber", "string", { nullable: true, description: "Reference Number" }),
@@ -153,9 +217,16 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/inventory/goods-receipt",
     description: "Goods receipts",
     mode: "paged",
-    primaryKey: "goodsReceiptNum",
+    pageSize: 200, // latency budget, not a cap: ~4.3s per 1000 rows
+    filters: [
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "goodsReceiptDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "locationID", param: "locationID", ops: ["eq"] },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["goodsReceiptNum", "goodsReceiptDate", "refNum", "transType", "branchName", "locationID", "statusID", "statusName", "sourceName", "createdBy"],
     columns: [
-      field("goodsReceiptNum", "string", { nullable: false, unique: true, description: "Goods Receipt Number" }),
+      field("goodsReceiptNum", "string", { nullable: true, description: "Goods Receipt Number" }), // null until authorisation, so neither key nor unique
       field("goodsReceiptDate", "date", { nullable: true, description: "Goods Receipt Date" }),
       field("linkGoodsReceiptNumEsbGoods", "string", { nullable: true, description: "Goods Receipt Number ESB Goods" }),
       field("refNum", "string", { nullable: true, description: "Reference Number" }),
@@ -175,7 +246,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/inventory/goods-transfer-request",
     description: "Goods transfer requests",
     mode: "paged",
+    pageSize: 200, // latency budget, not a cap: ~3.6s per 900 rows
     primaryKey: "transferNum",
+    filters: [
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "transferDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "transferNum", param: "transferNum", ops: ["eq"], superset: true },
+    ],
+    sortFields: ["transferNum", "transferDate", "purchaseRequestNum", "statusID"],
     columns: [
       field("transferNum", "string", { nullable: false, unique: true, description: "Goods Transfer Request Number" }),
       field("transferDate", "date", { nullable: true, description: "Goods Transfer Request Date" }),
@@ -193,6 +271,15 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Inventory item journals",
     mode: "paged",
     primaryKey: "itemJournalNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "branchID", param: "branchIDs", ops: ["eq", "in"] },
+      { field: "itemJournalDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "itemJournalNum", param: "itemJournalNum", ops: ["eq"], superset: true },
+      { field: "locationID", param: "locationIDs", ops: ["eq", "in"] },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["itemJournalNum", "itemJournalDate", "branchName", "locationID", "locationName", "statusID", "statusName"],
     columns: [
       field("itemJournalNum", "string", { nullable: false, unique: true, description: "Item Journal Number" }),
       field("itemJournalDate", "datetime", { nullable: true, description: "Item Journal Date in ISO 8601 format with timezone" }),
@@ -211,6 +298,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Accounting purposes",
     mode: "paged",
     primaryKey: "purposeID",
+    sortFields: ["purposeID"],
     columns: [
       field("purposeID", "number", { nullable: false, unique: true, description: "Purpose ID" }),
       field("purposeName", "string", { nullable: true, description: "Purpose Name" }),
@@ -224,6 +312,10 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Bills of material",
     mode: "paged",
     primaryKey: "bomID",
+    filters: [
+      { field: "bomTypeID", param: "bomTypeID", ops: ["eq"] },
+    ],
+    sortFields: ["bomID", "bomCode", "bomTypeID", "bomTypeName", "productName", "uomName", "notes", "flagActive"],
     columns: [
       field("bomID", "number", { nullable: false, unique: true, description: "Bill of Material ID" }),
       field("bomName", "string", { nullable: true, description: "Bill of Material Name" }),
@@ -242,6 +334,10 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Product categories",
     mode: "paged",
     primaryKey: "categoryID",
+    filters: [
+      { field: "categoryTypeID", param: "categoryTypeID", ops: ["eq"] },
+    ],
+    sortFields: ["categoryID", "categoryName", "categoryTypeName", "notes"],
     columns: [
       field("categoryID", "number", { nullable: false, unique: true, description: "Category ID" }),
       field("categoryName", "string", { nullable: true, description: "Category Name" }),
@@ -315,6 +411,10 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Customers",
     mode: "paged",
     primaryKey: "customerID",
+    filters: [
+      { field: "customerCategoryID", param: "customerCategoryID", ops: ["eq"], superset: true },
+    ],
+    sortFields: ["customerID", "customerCode", "paymentDueDays", "address", "picPhone"],
     columns: [
       field("customerID", "number", { nullable: false, unique: true, description: "Customer ID" }),
       field("customerName", "string", { nullable: true, description: "Customer Name" }),
@@ -365,6 +465,12 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Products",
     mode: "paged",
     primaryKey: "productID",
+    filters: [
+      { field: "categoryID", param: "categoryID", ops: ["eq"] },
+      { field: "categoryTypeID", param: "categoryTypeID", ops: ["eq"] },
+      { field: "subCategoryID", param: "subCategoryID", ops: ["eq"] },
+    ],
+    sortFields: ["productCode", "categoryID", "categoryTypeID", "flagActive"],
     columns: [
       field("productID", "number", { nullable: false, unique: true, description: "Product ID" }),
       field("productName", "string", { nullable: true, description: "Product Name" }),
@@ -386,6 +492,7 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Product subcategories",
     mode: "paged",
     primaryKey: "subCategoryID",
+    sortFields: ["subCategoryID"],
     columns: [
       field("subCategoryID", "number", { nullable: false, unique: true, description: "Sub Category ID" }),
       field("subCategoryName", "string", { nullable: true, description: "Sub Category Name" }),
@@ -410,7 +517,9 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/supplier",
     description: "Suppliers",
     mode: "paged",
+    pageSize: 500, // latency budget, not a cap: ~2.0s per 1000 rows
     primaryKey: "supplierID",
+    sortFields: ["supplierID", "supplierCode", "dueDate", "flagActive"],
     columns: [
       field("supplierID", "number", { nullable: false, unique: true, description: "Supplier ID" }),
       field("supplierName", "string", { nullable: true, description: "Supplier Name" }),
@@ -428,8 +537,9 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     name: "units",
     path: "/units",
     description: "Units of measure",
-    mode: "direct",
+    mode: "paged",
     primaryKey: "uomID",
+    sortFields: ["uomID", "uomName"],
     columns: [
       field("uomID", "number", { nullable: false, unique: true, description: "Unit of Material ID" }),
       field("uomName", "string", { nullable: true, description: "Unit of Material Name" }),
@@ -457,6 +567,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Memorial journals",
     mode: "paged",
     primaryKey: "memorialJournalNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "memorialJournalDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "memorialJournalNum", param: "memorialJournalNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["memorialJournalNum", "memorialJournalDate", "createdBy"],
     columns: [
       field("memorialJournalNum", "string", { nullable: false, unique: true, description: "Memorial Journal number with MJ prefix" }),
       field("memorialJournalDate", "datetime", { nullable: true, description: "Memorial Journal date" }),
@@ -511,6 +629,17 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Purchase invoices",
     mode: "paged",
     primaryKey: "purchaseInvoiceNum",
+    filters: [
+      { field: "additionalInfo", param: "additionalInfo", ops: ["eq"], superset: true },
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "createdBy", param: "createdBy", ops: ["eq"], superset: true },
+      { field: "currencyID", param: "currencyID", ops: ["eq"] },
+      { field: "purchaseInvoiceDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "purchaseInvoiceNum", param: "purchaseInvoiceNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "supplierID", param: "supplierID", ops: ["eq"] },
+    ],
+    sortFields: ["branchName", "createdBy", "invoiceTotal", "overDue", "purchaseInvoiceDate", "purchaseInvoiceDueDate", "purchaseInvoiceNum", "statusName", "supplierInvoiceNum", "supplierName"],
     columns: [
       field("branchID", "number", { nullable: true, description: "Branch ID" }),
       field("branchName", "string", { nullable: true, description: "Branch Name" }),
@@ -538,6 +667,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Purchase orders",
     mode: "paged",
     primaryKey: "purchaseNum",
+    filters: [
+      { field: "branchID", param: "branchIDs", ops: ["eq", "in"] },
+      { field: "purchaseDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "purchaseNum", param: "purchaseNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "supplierID", param: "supplierIDs", ops: ["eq", "in"] },
+    ],
+    sortFields: ["purchaseNum", "purchaseDate", "requiredDate", "branchName", "supplierName", "currencyID", "purchaseRequestNums", "purchaseTotal", "printedDate", "emailedBy", "emailedDate", "statusID", "statusName"],
     columns: [
       field("purchaseNum", "string", { nullable: false, unique: true, description: "Purchase Order Number" }),
       field("purchaseDate", "datetime", { nullable: true, description: "Purchase Order Date" }),
@@ -568,6 +705,12 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Purchase requests",
     mode: "paged",
     primaryKey: "purchaseRequestNum",
+    filters: [
+      { field: "branchID", param: "branchIDs", ops: ["eq", "in"] },
+      { field: "purchaseRequestNum", param: "purchaseRequestNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["purchaseRequestNum", "purchaseRequestDate", "requiredDate", "createdDate"],
     columns: [
       field("purchaseRequestNum", "string", { nullable: false, unique: true, description: "Purchase Request Number" }),
       field("purchaseRequestDate", "date", { nullable: true, description: "Purchase Request Date" }),
@@ -587,6 +730,13 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Purchase returns",
     mode: "paged",
     primaryKey: "purchaseReturnNum",
+    filters: [
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "purchaseReturnDate", from: "purchaseReturnDateFrom", to: "purchaseReturnDateTo", ops: ["eq", "gte", "lte"] },
+      { field: "purchaseReturnNum", param: "purchaseReturnNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "supplierID", param: "supplierID", ops: ["eq"] },
+    ],
     columns: [
       field("purchaseReturnNum", "string", { nullable: false, unique: true, description: "Purchase Return Number" }),
       field("purchaseReturnDate", "date", { nullable: true, description: "Purchase Return Date" }),
@@ -603,7 +753,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/receipt",
     description: "Customer receipts",
     mode: "paged",
+    pageSize: 200, // latency budget, not a cap: ~3.2s per 1000 rows
     primaryKey: "receiptNum",
+    filters: [
+      { field: "receiptDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "receiptNum", param: "receiptNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["receiptNum", "receiptDate", "branchName", "customerName", "grandTotal"],
     columns: [
       field("receiptNum", "string", { nullable: false, unique: true, description: "Receipt Number" }),
       field("receiptDate", "date", { nullable: true, description: "Receipt Date" }),
@@ -623,6 +780,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Sales orders",
     mode: "paged",
     primaryKey: "productSalesNum",
+    filters: [
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "customerID", param: "customerID", ops: ["eq"] },
+      { field: "productSalesDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "productSalesNum", param: "productSalesNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["branchName", "customerAddress", "requiredDate", "statusName", "productSalesDate", "productSalesNum", "productSalesTotal"],
     columns: [
       field("additionalInfo", "string", { nullable: true, description: "Additional Info" }),
       field("branchID", "number", { nullable: true, description: "Branch ID" }),
@@ -648,6 +813,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Simple manufacturing transactions",
     mode: "paged",
     primaryKey: "simpleManufacturingNum",
+    filters: [
+      { field: "bomTypeID", param: "bomTypeID", ops: ["eq"] },
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "simpleManufacturingDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "simpleManufacturingNum", param: "simpleManufacturingNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["simpleManufacturingNum", "simpleManufacturingDate", "branchName", "bomName", "manufacturingQty"],
     columns: [
       field("simpleManufacturingNum", "string", { nullable: false, unique: true, description: "Simple Manufacturing Number" }),
       field("simpleManufacturingDate", "datetime", { nullable: true, description: "Simple Manufacturing Date" }),
@@ -669,6 +842,14 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Simple purchase transactions",
     mode: "paged",
     primaryKey: "cashPurchaseNum",
+    filters: [
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "cashPurchaseDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "cashPurchaseNum", param: "cashPurchaseNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+      { field: "supplierID", param: "supplierID", ops: ["eq"] },
+    ],
+    sortFields: ["cashPurchaseNum", "cashPurchaseDate", "branchName", "cashPurchaseTotal", "statusID", "statusName"],
     columns: [
       field("cashPurchaseNum", "string", { nullable: false, unique: true, description: "Simple Purchase Number" }),
       field("cashPurchaseDate", "datetime", { nullable: true, description: "Simple Purchase Date" }),
@@ -690,6 +871,15 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     description: "Simple sales transactions",
     mode: "paged",
     primaryKey: "simpleProductSalesNum",
+    filters: [
+      { field: "branchID", param: "branchID", ops: ["eq"] },
+      { field: "customerID", param: "customerID", ops: ["eq"] },
+      { field: "paymentID", param: "paymentID", ops: ["eq"] },
+      { field: "simpleProductSalesDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"], superset: true },
+      { field: "simpleProductSalesNum", param: "simpleProductSalesNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["simpleProductSalesNum", "simpleProductSalesDate", "branchID", "branchName", "customerID", "customerName", "simpleProductSalesTotal", "additionalInfo"],
     columns: [
       field("simpleProductSalesNum", "string", { nullable: false, unique: true, description: "Simple Sales Number" }),
       field("simpleProductSalesDate", "datetime", { nullable: true, description: "Transaction Date" }),
@@ -712,7 +902,15 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     path: "/simple-transfer",
     description: "Simple inventory transfers",
     mode: "paged",
+    pageSize: 200, // latency budget, not a cap: ~5.7s per 1000 rows
     primaryKey: "simpleTransferNum",
+    filters: [
+      { field: "destinationLocationID", param: "destinationLocationID", ops: ["eq"] },
+      { field: "simpleTransferDate", from: "dateFrom", to: "dateTo", ops: ["eq", "gte", "lte"] },
+      { field: "simpleTransferNum", param: "simpleTransferNum", ops: ["eq"], superset: true },
+      { field: "statusID", param: "statusID", ops: ["eq"] },
+    ],
+    sortFields: ["simpleTransferNum", "simpleTransferDate", "destinationLocationID", "statusName"],
     columns: [
       field("simpleTransferNum", "string", { nullable: false, unique: true, description: "Simple Transfer Number" }),
       field("simpleTransferDate", "date", { nullable: true, description: "Simple Transfer Date" }),
@@ -725,9 +923,3 @@ export const ESB_CORE_CATALOG: EsbCoreObject[] = [
     ],
   },
 ];
-
-for (const object of ESB_CORE_CATALOG) {
-  if (object.primaryKey && !object.columns.some((column) => column.name === object.primaryKey)) {
-    throw new Error(`ESB Core primary key '${object.name}.${object.primaryKey}' is not a declared field`);
-  }
-}

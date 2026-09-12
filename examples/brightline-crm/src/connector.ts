@@ -4,8 +4,9 @@ import { type Row, SqlConnector } from "@futurity/atlas-connector/sql";
 import { catalog } from "./catalog";
 import { CONFIG } from "./env";
 
-// naive date_trunc bucketing and to_char rendering are cluster-independent only on a UTC
-// session; the pin rides every pooled connection's startup packet at no round trip
+const CURSOR = `"__brightline_stream"`;
+
+// naive date_trunc and to_char are cluster-independent only on a UTC session, pinned in the startup packet
 function pinnedUrl(url: string): string {
   const parsed = new URL(url);
   parsed.searchParams.set("options", "-c TimeZone=UTC");
@@ -16,8 +17,7 @@ export class BrightlineConnector extends SqlConnector<SQL> {
   readonly slug = CONFIG.slug;
   readonly catalog = catalog;
   readonly schema = CONFIG.schema;
-  // keys come only from real pg constraints (PKs + owners.email UNIQUE)
-  override readonly enforcesDeclaredKeys = true;
+  override readonly keysEnforced = true; // keys come only from real pg constraints (PKs + owners.email UNIQUE)
 
   protected override async openPool(credentials: Credentials): Promise<SQL> {
     if (!credentials.databaseUrl) throw new Error("databaseUrl is required");
@@ -39,26 +39,21 @@ export class BrightlineConnector extends SqlConnector<SQL> {
     built: { sql: string; params: unknown[] },
     req: NativeQueryRequest,
   ): AsyncIterable<Row[]> {
-    const cursor = `"__brightline_stream"`;
     const reserved = await pool.reserve();
+    const fetchNext = `FETCH FORWARD ${CONNECTOR_LIMITS.rowsPerBatch} FROM ${CURSOR}`;
     try {
       await reserved.unsafe("BEGIN");
       await reserved.unsafe(`SET LOCAL statement_timeout = ${req.timeoutMs}`);
-      await reserved.unsafe(`DECLARE ${cursor} NO SCROLL CURSOR FOR ${built.sql}`, built.params);
+      await reserved.unsafe(`DECLARE ${CURSOR} NO SCROLL CURSOR FOR ${built.sql}`, built.params);
       for (;;) {
-        const rows = (await reserved.unsafe(
-          `FETCH FORWARD ${CONNECTOR_LIMITS.rowsPerBatch} FROM ${cursor}`,
-        )) as Row[];
+        const rows = (await reserved.unsafe(fetchNext)) as Row[];
         if (rows.length > 0) yield rows;
         if (rows.length < CONNECTOR_LIMITS.rowsPerBatch) return;
       }
     } finally {
-      try {
-        await reserved.unsafe("ROLLBACK");
-      } catch {}
-      try {
-        reserved.release();
-      } catch {}
+      // the consumer can walk away mid-stream, and a rollback on a dead connection is not ours to report
+      await reserved.unsafe("ROLLBACK").catch(() => {});
+      reserved.release();
     }
   }
 }

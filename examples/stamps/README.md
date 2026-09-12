@@ -6,8 +6,8 @@ Read-only Atlas connector for Stamps API v4. It exposes two tables:
 - `rewards`: merchant rewards from cursor-paginated `GET /api/v4/rewards/`.
 
 The connector deliberately excludes members, profiles, vouchers, activities,
-redemptions, and transactions. Those endpoints require a person or transaction
-lookup and cannot support Atlas's unfiltered discovery and profiling scans.
+redemptions, and transactions. Every one of those endpoints requires a person or
+transaction identifier, so none of them is a table anything can enumerate.
 
 ## Credentials
 
@@ -81,10 +81,16 @@ properties such as store photos, reward membership levels, and reward metadata
 are intentionally omitted because Atlas rows contain scalar values only.
 
 The connector fetches Stamps pages in source order, applies Atlas filters in
-memory using the discovered catalog types, and projects only the requested fields.
-Sorting, offsets, joins, and
-aggregates are not advertised and are rejected if sent. Counts and profiling
-scan the same rows as queries.
+memory using the discovered catalog types, and projects only the requested
+fields. The v4 api filters nothing and sorts nothing upstream, so the pushdown
+map is empty and the capability doc advertises no operator, no sort, no offset
+and no join; a join sent on a query is a 422, and there is no `/aggregate` route
+to call. Because `applyFilters` evaluates every predicate with Atlas's own
+semantics, the stream's leading plan claims `filters: true`; it claims the window
+too when the request asked for no order, which makes an unsorted lookup one
+request. A sorted request leaves both the order and the window to the host.
+`size()` answers for `stores`, whose index arrives in one request, and `null` for
+the cursor-paged `rewards`, whose total only a walk would find.
 
 See the [Stamps API v4 documentation](https://staging-crm2.stamps.id/api/v4/docs)
 and [OpenAPI document](https://staging-crm2.stamps.id/api/v4/openapi.json).

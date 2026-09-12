@@ -1,43 +1,39 @@
-// lark base (bitable) → atlas: tables → atlas tables, fields → columns, records/search → rows.
-// the tenant's app credentials and app_token arrive on every request, so one process serves any number of bases and keeps none of them.
-// lark evaluates the pushable slice of a filter; applyFilters re-runs the full set, so every advertised op holds.
+// credentials and app_token arrive on every request, so one process serves any base and keeps none
 
 import {
-  applyFilters,
   assertKnownFields,
   AtlasConnector,
-  byteOrderCompare,
   discoverFields,
   field,
-  fieldTypes,
   unknownEntity,
   unsupported,
   windowRows,
-  type AtlasType,
-  type AtlasValue,
   type CheckRequest,
-  type CountExactRequest,
+  type CountRequest,
   type Credentials,
   type DiscoveredTable,
   type DiscoveryAnswer,
   type DiscoveryRequest,
+  type EntitySize,
   type NativeQueryRequest,
+  type QueryChunk,
+  type SizeRequest,
   type SourceRow,
 } from "@futurity/atlas-connector";
-import { ATLAS_JSON } from "./capability";
-import { atlasTypeOf, flattenValue, LARK_TYPE } from "./field-map";
+import { CAPABILITY } from "./capability";
+import { atlasTypeOf, flattenValue, LARK_TYPE, RECORD_ID } from "./field-map";
 import {
   LarkClient,
   larkCredentials,
   makeDeadline,
+  MAX_PAGE_SIZE,
   type Deadline,
   type LarkField,
   type LarkRecord,
   type LarkTable,
 } from "./lark-api";
-import { pushdownConditions } from "./pushdown";
+import { planFilter, planSort, recordIdLookup, servedBy } from "./pushdown";
 
-const RECORD_ID = "record_id";
 const META_CACHE_MS = 60_000;
 const SAMPLE_PAGE_SIZE = 20;
 const SAMPLES_PER_FIELD = 5;
@@ -54,15 +50,16 @@ function clientFor(credentials: Credentials): LarkClient {
 }
 
 function catalogFields(fieldsByName: Map<string, LarkField>) {
-  return [
-    field(RECORD_ID, "string", { unique: true, description: "lark record id (system primary key)" }),
-    ...[...fieldsByName.values()]
-      .filter((source) => source.field_name !== RECORD_ID)
-      .map((source) => field(source.field_name, atlasTypeOf(source), {
+  const recordId = field(RECORD_ID, "string", { unique: true, description: "lark record id (system primary key)" });
+  const columns = [...fieldsByName.values()]
+    .filter((source) => source.field_name !== RECORD_ID)
+    .map((source) =>
+      field(source.field_name, atlasTypeOf(source), {
         nullable: true,
         description: `lark ${source.ui_type ?? `type ${source.type}`}`,
-      })),
-  ];
+      }),
+    );
+  return [recordId, ...columns];
 }
 
 function toRow(record: LarkRecord, columns: Iterable<string>, fieldsByName: Map<string, LarkField>): SourceRow {
@@ -78,50 +75,38 @@ function toRow(record: LarkRecord, columns: Iterable<string>, fieldsByName: Map<
   return row;
 }
 
-function compareCell(a: Exclude<AtlasValue, null>, b: Exclude<AtlasValue, null>, type: AtlasType | undefined): number {
-  if (type === "number" || type === "decimal") {
-    const left = Number(a);
-    const right = Number(b);
-    if (Number.isFinite(left) && Number.isFinite(right)) {
-      if (left === right) return 0;
-      return left < right ? -1 : 1;
-    }
+async function* toRows(
+  batches: AsyncIterable<LarkRecord[]>,
+  columns: Iterable<string>,
+  fieldsByName: Map<string, LarkField>,
+): AsyncIterable<SourceRow[]> {
+  for await (const records of batches) {
+    yield records.map((record) => toRow(record, columns, fieldsByName));
   }
-  return byteOrderCompare(String(a), String(b));
-}
-
-function sortRows(rows: SourceRow[], sort: NativeQueryRequest["sort"], types: Record<string, AtlasType>): void {
-  rows.sort((a, b) => {
-    for (const key of sort) {
-      const left = a[key.field];
-      const right = b[key.field];
-      if (left === null || right === null) {
-        if (left === null && right === null) continue;
-        return left === null ? 1 : -1;
-      }
-      const order = compareCell(left, right, types[key.field]);
-      if (order !== 0) return key.dir === "desc" ? -order : order;
-    }
-    return 0;
-  });
 }
 
 function project(rows: SourceRow[], fields: string[]): SourceRow[] {
   return rows.map((row) => {
     const out: SourceRow = {};
-    for (const field of fields) out[field] = row[field];
+    for (const name of fields) out[name] = row[name];
     return out;
   });
+}
+
+// offset+limit rows and no more, so one page can be the whole answer
+function pageSizeFor(req: NativeQueryRequest): number | undefined {
+  if (req.limit === undefined) return undefined;
+  return Math.min(MAX_PAGE_SIZE, (req.offset ?? 0) + req.limit);
 }
 
 export class LarkConnector extends AtlasConnector {
   readonly slug = "lark-base";
 
-  // keyed by credential set: one tenant must never read tables from another's cache
+  // keyed by credential set: one tenant must never read another's tables
   private readonly metaByCredential = new Map<string, BaseMeta>();
 
-  capability() {
-    return ATLAS_JSON;
+  capabilities() {
+    return CAPABILITY;
   }
 
   async check(req: CheckRequest): Promise<void> {
@@ -168,67 +153,87 @@ export class LarkConnector extends AtlasConnector {
     return byName;
   }
 
-  // #endregion
-
-  // #region row production
-
-  // pushes the pushable slice of and[]; rows carry exactly the needed columns
-  private async *scan(
+  // without the record id, which shadows a field spelled the same way
+  private async filterableFields(
     client: LarkClient,
-    req: NativeQueryRequest,
+    table: LarkTable,
+    meta: BaseMeta,
     deadline: Deadline,
-    tableId: string,
-    sourceFields: Map<string, LarkField>,
-  ): AsyncIterable<SourceRow[]> {
-    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; atlas joins locally");
-    const fieldsByName = new Map(sourceFields);
-    fieldsByName.delete(RECORD_ID);
-    const types = fieldTypes(catalogFields(fieldsByName));
-    const columns = assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
-    const realFields = [...columns].filter((column) => fieldsByName.has(column));
-    const batches = client.searchAll(tableId, deadline, {
-      // field_names must name real fields; record_id rides along on every record anyway
-      fieldNames: realFields.length > 0 ? realFields : undefined,
-      conditions: pushdownConditions(req.and, fieldsByName),
-    });
-    for await (const records of batches) {
-      const rows = records.map((record) => toRow(record, columns, fieldsByName));
-      yield applyFilters(rows, { and: req.and, or: req.or }, types);
-    }
+  ): Promise<Map<string, LarkField>> {
+    const byName = new Map(await this.fields(client, meta, table.table_id, deadline));
+    byName.delete(RECORD_ID);
+    return byName;
   }
 
   // #endregion
 
   // #region protocol
 
-  async *query(req: NativeQueryRequest): AsyncIterable<SourceRow[]> {
+  async *query(req: NativeQueryRequest): AsyncIterable<QueryChunk> {
+    if (req.joins && req.joins.length > 0) throw unsupported("joins are not supported; atlas joins locally");
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
     const { meta, table } = await this.resolveTable(client, req.table, deadline);
-    const fieldsByName = await this.fields(client, meta, table.table_id, deadline);
-    let batches: AsyncIterable<SourceRow[]> | Iterable<SourceRow[]> =
-      this.scan(client, req, deadline, table.table_id, fieldsByName);
-    if (req.sort.length > 0) {
-      const rows: SourceRow[] = [];
-      for await (const batch of batches) rows.push(...batch);
-      sortRows(rows, req.sort, fieldTypes(catalogFields(fieldsByName)));
-      batches = [rows];
+    const fieldsByName = await this.filterableFields(client, table, meta, deadline);
+    const columns = assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
+
+    const recordId = recordIdLookup(req.and);
+    if (recordId !== null) {
+      // the get evaluates that one eq only; a second predicate stays the host's
+      const soleFilter = req.and.length === 1 && (req.or?.length ?? 0) === 0;
+      yield { served: { filters: soleFilter, sort: true, window: soleFilter && (req.offset ?? 0) === 0 } };
+      const record = await client.getRecord(table.table_id, recordId, deadline);
+      if (record) yield project([toRow(record, columns, fieldsByName)], req.fields);
+      return;
     }
-    for await (const batch of windowRows(batches, req)) {
+
+    const filter = planFilter(req.and, req.or, fieldsByName);
+    const sort = planSort(req.sort, fieldsByName);
+    const served = servedBy(filter, sort);
+    yield { served };
+
+    // field_names must name real fields; record_id rides on every record anyway
+    const realFields = [...columns].filter((column) => fieldsByName.has(column));
+    const pages = client.searchAll(table.table_id, deadline, {
+      ...(realFields.length > 0 ? { fieldNames: realFields } : {}),
+      ...(filter.filter ? { filter: filter.filter } : {}),
+      ...(sort && sort.length > 0 ? { sort } : {}),
+      ...(served.window ? { pageSize: pageSizeFor(req) } : {}),
+    });
+
+    const rows = toRows(pages, columns, fieldsByName);
+    for await (const batch of served.window ? windowRows(rows, req) : rows) {
       deadline.check();
       yield project(batch, req.fields);
     }
   }
 
-  // every search page carries the table's total
-  override async exactCount(req: CountExactRequest): Promise<number | null> {
+  // total counts the pushed-filter matches uncapped, so an exact filter set is one request
+  async count(req: CountRequest): Promise<number> {
+    const client = clientFor(req.credentials);
+    const deadline = makeDeadline(req.timeoutMs);
+    const { meta, table } = await this.resolveTable(client, req.table, deadline);
+    const fieldsByName = await this.filterableFields(client, table, meta, deadline);
+    assertKnownFields(req, [RECORD_ID, ...fieldsByName.keys()]);
+
+    const filter = planFilter(req.and, req.or, fieldsByName);
+    if (!filter.exact) {
+      throw unsupported("lark counts only filters it evaluates as atlas does; tally /query for this one");
+    }
+    const total = await client.recordTotal(table.table_id, deadline, filter.filter);
+    if (total === null) throw unsupported("lark answered this search without a total");
+    return total;
+  }
+
+  async size(req: SizeRequest): Promise<EntitySize | null> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
     const { table } = await this.resolveTable(client, req.table, deadline);
-    return await client.recordTotal(table.table_id, deadline);
+    const total = await client.recordTotal(table.table_id, deadline);
+    return total === null ? null : { rows: total, exact: true };
   }
 
-  async discover(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
+  async discovery(req: DiscoveryRequest): Promise<DiscoveryAnswer> {
     const client = clientFor(req.credentials);
     const deadline = makeDeadline(req.timeoutMs);
     const meta = await this.meta(client, deadline);
@@ -247,19 +252,19 @@ export class LarkConnector extends AtlasConnector {
       const fields = discoverFields(catalogFields(fieldsByName));
       const foreignKeys: DiscoveredTable["foreignKeys"] = [];
 
-      for (const field of fields) {
+      for (const discovered of fields) {
         for (const record of records) {
-          if (field.samples.length >= SAMPLES_PER_FIELD) break;
-          const value = toRow(record, [field.name], fieldsByName)[field.name];
-          if (value !== null) field.samples.push(value);
+          if (discovered.samples.length >= SAMPLES_PER_FIELD) break;
+          const value = toRow(record, [discovered.name], fieldsByName)[discovered.name];
+          if (value !== null) discovered.samples.push(value);
         }
       }
-      for (const field of fieldsByName.values()) {
-        if (field.field_name === RECORD_ID) continue;
-        const isLink = field.type === LARK_TYPE.singleLink || field.type === LARK_TYPE.duplexLink;
-        const target = field.property?.table_id ? idToName.get(field.property.table_id) : undefined;
+      for (const source of fieldsByName.values()) {
+        if (source.field_name === RECORD_ID) continue;
+        const isLink = source.type === LARK_TYPE.singleLink || source.type === LARK_TYPE.duplexLink;
+        const target = source.property?.table_id ? idToName.get(source.property.table_id) : undefined;
         if (isLink && target) {
-          foreignKeys.push({ field: field.field_name, targetTable: target, targetField: RECORD_ID });
+          foreignKeys.push({ field: source.field_name, targetTable: target, targetField: RECORD_ID });
         }
       }
 

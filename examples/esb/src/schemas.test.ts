@@ -2,20 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { field } from "@futurity/atlas-connector";
 import { ESB_CORE_CATALOG } from "./catalog";
 import type { EsbCoreObject } from "./types";
-import {
-  EsbDatetimeValue,
-  EsbFilterSet,
-  EsbRow,
-  parseEsbConfig,
-} from "./schemas";
-
-const FIELD_TYPES = {
-  happenedAt: "datetime",
-  businessDate: "date",
-  amount: "decimal",
-  enabled: "boolean",
-  label: "string",
-} as const;
+import { EsbRow, parseEsbConfig } from "./schemas";
 
 const TYPED_OBJECT: EsbCoreObject = {
   name: "typed",
@@ -31,14 +18,23 @@ const TYPED_OBJECT: EsbCoreObject = {
     field("enabled", "boolean", { nullable: true, description: "Enabled" }),
   ],
 };
+
 const GOODS_DELIVERIES = ESB_CORE_CATALOG.find((object) => object.name === "goods_deliveries")!;
 
 describe("ESB value schemas", () => {
+  const happenedAt = EsbRow(TYPED_OBJECT, ["happenedAt"]);
+
   test("canonicalizes zoned datetimes and preserves valid zone-less datetimes", () => {
-    expect(EsbDatetimeValue.parse("2024-01-01T09:00:00+07:00")).toBe("2024-01-01T02:00:00.000Z");
-    expect(EsbDatetimeValue.parse("2024-01-01T02:00:00Z")).toBe("2024-01-01T02:00:00.000Z");
-    expect(EsbDatetimeValue.parse("2024-01-01T09:00:00")).toBe("2024-01-01T09:00:00");
-    expect(EsbDatetimeValue.parse(null)).toBeNull();
+    expect(happenedAt.parse({ happenedAt: "2024-01-01T09:00:00+07:00" })).toEqual({
+      happenedAt: "2024-01-01T02:00:00.000Z",
+    });
+    expect(happenedAt.parse({ happenedAt: "2024-01-01T02:00:00Z" })).toEqual({
+      happenedAt: "2024-01-01T02:00:00.000Z",
+    });
+    expect(happenedAt.parse({ happenedAt: "2024-01-01T09:00:00" })).toEqual({
+      happenedAt: "2024-01-01T09:00:00",
+    });
+    expect(happenedAt.parse({ happenedAt: null })).toEqual({ happenedAt: null });
   });
 
   test("rejects invalid datetime values instead of falling back to Atlas scalars", () => {
@@ -50,7 +46,7 @@ describe("ESB value schemas", () => {
       1_704_067_200_000,
       true,
     ]) {
-      expect(EsbDatetimeValue.safeParse(value).success).toBe(false);
+      expect(happenedAt.safeParse({ happenedAt: value }).success).toBe(false);
     }
   });
 
@@ -101,8 +97,6 @@ describe("ESB value schemas", () => {
   });
 
   test("an empty projection has no catalog field to require, so count() rows still parse", () => {
-    // count() on an entity with no primary key and no filters needs no columns at all;
-    // requiring a field there would reject every row of a perfectly valid response.
     expect(EsbRow(GOODS_DELIVERIES, []).parse({ goodsDeliveryNum: "GD1" })).toEqual({});
     expect(EsbRow(GOODS_DELIVERIES, []).parse({})).toEqual({});
   });
@@ -127,69 +121,9 @@ describe("ESB value schemas", () => {
       for (const value of [1, true]) {
         const parsed = schema.safeParse({ flagActive: value });
         expect(parsed.success).toBe(true);
-        if (parsed.success) {
-          expect(parsed.data.flagActive).toBe(true);
-          expect(typeof parsed.data.flagActive).toBe("boolean");
-        }
+        if (parsed.success) expect(parsed.data.flagActive).toBe(true);
       }
     }
-  });
-});
-
-describe("ESB filter schemas", () => {
-  test("normalizes typed scalar and set operands without mutating the request", () => {
-    const filters = {
-      and: [
-        { field: "happenedAt", op: "eq", value: "2024-01-01T02:00:00Z" },
-        { field: "businessDate", op: "eq", value: "2024-01-01" },
-        { field: "amount", op: "gte", value: "10.50" },
-        { field: "label", op: "isnull" },
-      ],
-      or: [
-        [{ field: "happenedAt", op: "in", values: ["2024-01-01T09:00:00+07:00", null] }],
-        [{ field: "label", op: "startswith", value: "2024" }],
-      ],
-    };
-
-    expect(EsbFilterSet(FIELD_TYPES).parse(filters)).toEqual({
-      and: [
-        { field: "happenedAt", op: "eq", value: "2024-01-01T02:00:00.000Z" },
-        { field: "businessDate", op: "eq", value: "2024-01-01" },
-        { field: "amount", op: "gte", value: "10.50" },
-        { field: "label", op: "isnull" },
-      ],
-      or: [
-        [{ field: "happenedAt", op: "in", values: ["2024-01-01T02:00:00.000Z", null] }],
-        [{ field: "label", op: "startswith", value: "2024" }],
-      ],
-    });
-    expect(filters.and[0]?.value).toBe("2024-01-01T02:00:00Z");
-  });
-
-  test("rejects operands that contradict catalog types", () => {
-    const schema = EsbFilterSet(FIELD_TYPES);
-    for (const filter of [
-      { field: "happenedAt", op: "eq", value: "not-a-datetime" },
-      { field: "businessDate", op: "in", values: ["2024-02-30"] },
-      { field: "amount", op: "eq", value: 1e-7 },
-      { field: "amount", op: "eq", value: Number.MAX_SAFE_INTEGER + 1 },
-      { field: "enabled", op: "eq", value: 1 },
-      { field: "label", op: "eq", value: true },
-    ]) {
-      expect(schema.safeParse({ and: [filter] }).success).toBe(false);
-    }
-  });
-
-  test("retains textual and strict Atlas filter behavior", () => {
-    const schema = EsbFilterSet(FIELD_TYPES);
-    expect(
-      schema.parse({ and: [{ field: "businessDate", op: "startswith", value: "2024" }] }),
-    ).toEqual({ and: [{ field: "businessDate", op: "startswith", value: "2024" }] });
-    expect(
-      schema.safeParse({
-        and: [{ field: "happenedAt", op: "eq", value: "2024-01-01T02:00:00Z", extra: true }],
-      }).success,
-    ).toBe(false);
   });
 });
 

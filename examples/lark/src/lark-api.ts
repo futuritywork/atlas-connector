@@ -1,5 +1,3 @@
-// thin client for the lark open platform: tenant-token auth plus the bitable endpoints this connector reads; one instance per request
-
 import { createHash } from "node:crypto";
 import {
   badRequest,
@@ -9,16 +7,16 @@ import {
   unknownEntity,
 } from "@futurity/atlas-connector";
 
-// feishu.cn bases change this one line
-const DOMAIN = "https://open.larksuite.com";
+const DOMAIN = "https://open.larksuite.com"; // feishu.cn bases change this line
 
 const TOKEN_SLACK_MS = 5 * 60 * 1000;
-// lark app_access_token invalid / tenant token expired: refetch once and retry
-const TOKEN_EXPIRED_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
-
-// lark app-level qps (1254290 TooManyRequest): short waits inside the deadline outlast it
-const RATE_LIMITED_CODE = 1254290;
+const TOKEN_EXPIRED_CODES = new Set([99991661, 99991663, 99991664, 99991668]); // tenant token expired or invalid
+const RATE_LIMITED_CODE = 1254290; // app-level qps, TooManyRequest
 const RATE_LIMIT_BACKOFF_MS = 600;
+const RECORD_NOT_FOUND_CODE = 1254043;
+const NOT_EXIST_CODE = 91402; // an unknown app_token, and a base the app was never added to
+
+export const MAX_PAGE_SIZE = 500; // bitable's ceiling on one search page
 
 const REQUIRED_KEYS = ["appId", "appSecret", "appToken"] as const;
 
@@ -32,12 +30,11 @@ type TokenAnswer = { code: number; msg: string; tenant_access_token?: string; ex
 
 export type LarkTable = { table_id: string; name: string };
 
-// only the slice this connector reads; link fields carry the target table in property.table_id
 export type LarkField = {
   field_name: string;
   type: number;
   ui_type?: string;
-  property?: { table_id?: string } | null;
+  property?: { table_id?: string; options?: { name?: string }[] } | null; // table_id names a link field's target
 };
 
 export type LarkRecord = {
@@ -47,17 +44,38 @@ export type LarkRecord = {
 
 export type LarkCondition = { field_name: string; operator: string; value?: string[] };
 
-type SearchPage = {
-  items?: LarkRecord[];
-  has_more: boolean;
-  page_token?: string;
-  total?: number;
+// bitable nests one level only
+type LarkFilterGroup = { conjunction: "and" | "or"; conditions: LarkCondition[] };
+
+export type LarkFilter = { conjunction: "and" | "or"; conditions?: LarkCondition[]; children?: LarkFilterGroup[] };
+
+export type LarkSortKey = { field_name: string; desc: boolean };
+
+type SearchOptions = {
+  fieldNames?: string[];
+  filter?: LarkFilter;
+  sort?: LarkSortKey[];
+  pageSize?: number;
 };
 
-// lark's per-request deadline: every upstream call aborts at the wire request's own budget
+type Page<T> = { items?: T[]; has_more: boolean; page_token?: string };
+
+type SearchPage = Page<LarkRecord> & { total?: number };
+
+// every upstream call aborts on the wire request's own budget
 export type Deadline = { remainingMs(): number; check(): void };
 
-// tokens belong to the app, not the base, so tenants sharing an app share one mint
+class LarkError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LarkError";
+  }
+}
+
+// app-scoped, so tenants sharing an app share one mint
 // keyed by digest: a secret must not sit in a map key
 const tokens = new Map<string, { value: string; expiresAt: number }>();
 
@@ -82,8 +100,7 @@ export function makeDeadline(timeoutMs: number): Deadline {
 }
 
 export class LarkClient {
-  // digest of the whole set, so a cache entry never answers another set
-  readonly cacheKey: string;
+  readonly cacheKey: string; // digest of all three, so one tenant never reads another's cache
   private readonly tokenKey: string;
 
   constructor(private readonly credentials: LarkCredentials) {
@@ -92,7 +109,6 @@ export class LarkClient {
     this.tokenKey = digest([appId, appSecret]);
   }
 
-  // POST /auth/v3/tenant_access_token/internal → { tenant_access_token, expire } (expire ≈ 7200s)
   private async tenantToken(deadline: Deadline): Promise<string> {
     const key = this.tokenKey;
     const cached = tokens.get(key);
@@ -148,10 +164,10 @@ export class LarkClient {
         await Bun.sleep(RATE_LIMIT_BACKOFF_MS);
         return await this.request(method, path, deadline, opts, retried);
       }
-      if (res.status === 404 || envelope.code === 91402) {
+      if (res.status === 404 || envelope.code === NOT_EXIST_CODE) {
         throw unknownEntity(`lark: ${envelope.msg} (code=${envelope.code})`);
       }
-      throw new Error(`lark ${path}: code=${envelope.code} ${envelope.msg}`);
+      throw new LarkError(envelope.code, `lark ${path}: code=${envelope.code} ${envelope.msg}`);
     }
     return envelope.data as T;
   }
@@ -160,15 +176,14 @@ export class LarkClient {
     return `/open-apis/bitable/v1/apps/${this.credentials.appToken}/tables`;
   }
 
-  // the mint proves app_id/app_secret, the read proves app_token
-  // failures leave as plain Error: /check shows the message to the tenant
+  // the mint proves the app id and secret, the table read proves the app_token
+  // plain Error: /check shows the message to the tenant who typed the credentials
   async checkAccess(deadline: Deadline): Promise<void> {
     try {
       await this.request<{ items?: LarkTable[] }>("GET", this.tablesPath(), deadline, {
         query: { page_size: "1" },
       });
     } catch (error) {
-      // lark answers 91402 NOTEXIST both for a token that names no base and for a base the app was never added to
       if (error instanceof ConnectorError && error.status === 404) {
         throw new Error(
           `Lark has no base ${this.credentials.appToken} this app can open: check the token, and that the app was added to the base as a collaborator (${error.message})`,
@@ -178,13 +193,13 @@ export class LarkClient {
     }
   }
 
-  // GET pagination: follow page_token until has_more clears; metadata pages cap at 100
+  // metadata pages cap at page_size 100
   private async listAll<T>(path: string, deadline: Deadline): Promise<T[]> {
     const items: T[] = [];
     let pageToken: string | undefined;
     do {
       deadline.check();
-      const page = await this.request<{ items?: T[]; has_more: boolean; page_token?: string }>("GET", path, deadline, {
+      const page = await this.request<Page<T>>("GET", path, deadline, {
         query: { page_size: "100", ...(pageToken ? { page_token: pageToken } : {}) },
       });
       items.push(...(page.items ?? []));
@@ -201,38 +216,27 @@ export class LarkClient {
     return await this.listAll<LarkField>(`${this.tablesPath()}/${tableId}/fields`, deadline);
   }
 
-  // POST .../records/search — one page; conditions are AND-conjoined; page_size max 500
   async searchPage(
     tableId: string,
     deadline: Deadline,
-    opts: {
-      fieldNames?: string[];
-      conditions?: LarkCondition[];
-      pageToken?: string;
-      pageSize?: number;
-    } = {},
+    opts: SearchOptions & { pageToken?: string } = {},
   ): Promise<SearchPage> {
     deadline.check();
     const body: Record<string, unknown> = { automatic_fields: false };
     if (opts.fieldNames && opts.fieldNames.length > 0) body.field_names = opts.fieldNames;
-    if (opts.conditions && opts.conditions.length > 0) {
-      body.filter = { conjunction: "and", conditions: opts.conditions };
-    }
+    if (opts.filter) body.filter = opts.filter;
+    if (opts.sort && opts.sort.length > 0) body.sort = opts.sort;
     return await this.request<SearchPage>("POST", `${this.tablesPath()}/${tableId}/records/search`, deadline, {
       query: {
-        page_size: String(opts.pageSize ?? 500),
+        page_size: String(Math.min(opts.pageSize ?? MAX_PAGE_SIZE, MAX_PAGE_SIZE)),
         ...(opts.pageToken ? { page_token: opts.pageToken } : {}),
       },
       body,
     });
   }
 
-  // full scan of a table under the given pushdown; caps nothing — callers own limits
-  async *searchAll(
-    tableId: string,
-    deadline: Deadline,
-    opts: { fieldNames?: string[]; conditions?: LarkCondition[] } = {},
-  ): AsyncIterable<LarkRecord[]> {
+  // caps nothing; callers stop reading when they have enough
+  async *searchAll(tableId: string, deadline: Deadline, opts: SearchOptions = {}): AsyncIterable<LarkRecord[]> {
     let pageToken: string | undefined;
     do {
       const page = await this.searchPage(tableId, deadline, { ...opts, pageToken });
@@ -241,9 +245,23 @@ export class LarkClient {
     } while (pageToken);
   }
 
-  // exact table size: an unfiltered search page carries the table's total
-  async recordTotal(tableId: string, deadline: Deadline): Promise<number | null> {
-    const page = await this.searchPage(tableId, deadline, { pageSize: 1 });
+  // text_field_as_array spells text cells the way records/search does
+  async getRecord(tableId: string, recordId: string, deadline: Deadline): Promise<LarkRecord | null> {
+    const path = `${this.tablesPath()}/${tableId}/records/${encodeURIComponent(recordId)}`;
+    try {
+      const answer = await this.request<{ record?: LarkRecord }>("GET", path, deadline, {
+        query: { text_field_as_array: "true" },
+      });
+      return answer.record ?? null;
+    } catch (error) {
+      if (error instanceof LarkError && error.code === RECORD_NOT_FOUND_CODE) return null;
+      throw error;
+    }
+  }
+
+  // every search page carries the filtered total, so one row is enough to count
+  async recordTotal(tableId: string, deadline: Deadline, filter?: LarkFilter): Promise<number | null> {
+    const page = await this.searchPage(tableId, deadline, { pageSize: 1, ...(filter ? { filter } : {}) });
     return page.total ?? null;
   }
 }
