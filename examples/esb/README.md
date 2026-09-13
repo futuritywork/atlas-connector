@@ -91,6 +91,8 @@ requires a shared token coordinator and is intentionally outside this example.
 
 `src/catalog.ts` is generated from the byte-for-byte published ESB input in
 `catalog-data/api_data.json`. Its header records the source URL and SHA-256.
+Both files are excluded from Prettier to preserve the source bytes and generated
+output.
 `catalog-data/overrides.ts` records the selected endpoints and column order,
 identifier evidence, field-table corrections, type decisions, and editorial
 wording. All non-key fields remain nullable; apidoc's `optional` flag does not
@@ -112,6 +114,8 @@ bun run catalog:check --input /tmp/esb-api_data.json
 ```
 
 A changed input hash, selected contract, or stale override makes the check fail.
+The hash intentionally covers every source byte, including formatting and
+unselected endpoints; a hash-only diff does not mean a runtime contract changed.
 CI checks only the pinned input; it does not fetch upstream. After reviewing an
 update, replace `catalog-data/api_data.json` with the downloaded bytes, reconcile
 the explicit overrides, regenerate, and run `bun test` and `bun run check`.

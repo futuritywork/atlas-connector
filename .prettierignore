@@ -1,0 +1,3 @@
+# Preserve the upstream bytes and deterministic generator output.
+examples/esb/catalog-data/api_data.json
+examples/esb/src/catalog.ts

@@ -11,6 +11,13 @@ const source = await Bun.file(
 const data = JSON.parse(source);
 const catalogPath = new URL("../src/catalog.ts", import.meta.url);
 
+function withUnselectedUpstreamEdit(): string {
+  return source.replace(
+    "Authorize an Advance Payment.",
+    "Authorize an Advance Payment. Updated upstream documentation.",
+  );
+}
+
 function changedEndpoint(change: (entry: any) => void): unknown {
   const copy = structuredClone(data);
   const entry = copy.find(
@@ -96,10 +103,8 @@ describe("ESB catalog generation", () => {
     const directory = await mkdtemp(join(tmpdir(), "esb-catalog-"));
     const original = await Bun.file(catalogPath).text();
     try {
-      const copy = structuredClone(data);
-      copy[0].description += " Updated upstream documentation.";
       const input = join(directory, "api_data.json");
-      await Bun.write(input, JSON.stringify(copy));
+      await Bun.write(input, withUnselectedUpstreamEdit());
       const child = Bun.spawn(
         [
           process.execPath,
@@ -119,8 +124,8 @@ describe("ESB catalog generation", () => {
   });
 
   test("an upstream change makes regeneration differ even outside selected endpoints", () => {
-    const copy = structuredClone(data);
-    copy[0].description += " Updated upstream documentation.";
-    expect(renderCatalog(JSON.stringify(copy))).not.toBe(renderCatalog(source));
+    expect(renderCatalog(withUnselectedUpstreamEdit())).not.toBe(
+      renderCatalog(source),
+    );
   });
 });
