@@ -7,7 +7,9 @@
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "catalog:generate": "bun run scripts/build-catalog.ts",
+    "catalog:check": "bun run scripts/build-catalog.ts --check"
   },
   "dependencies": {
     "@futurity/atlas-connector": "file:../..",

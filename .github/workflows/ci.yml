@@ -14,6 +14,10 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: typecheck sdk
         run: bunx tsc --noEmit
+      - name: typecheck ESB connector and catalog generator
+        run: bunx tsc --noEmit -p examples/esb
+      - name: ESB catalog drift guard
+        run: bun run --cwd examples/esb catalog:check
       - name: typecheck cli
         run: bunx tsc --noEmit -p cli
       - name: typecheck the hosted entrypoint and tests

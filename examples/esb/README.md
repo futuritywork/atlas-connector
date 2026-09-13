@@ -87,6 +87,43 @@ Run **one replica**. The in-memory coordinator is process-local, so horizontal
 replicas can invalidate each other's ESB sessions. A multi-replica deployment
 requires a shared token coordinator and is intentionally outside this example.
 
+## Maintaining the generated catalog
+
+`src/catalog.ts` is generated from the byte-for-byte published ESB input in
+`catalog-data/api_data.json`. Its header records the source URL and SHA-256.
+Both files are excluded from Prettier to preserve the source bytes and generated
+output.
+`catalog-data/overrides.ts` records the selected endpoints and column order,
+identifier evidence, field-table corrections, type decisions, and editorial
+wording. All non-key fields remain nullable; apidoc's `optional` flag does not
+reliably describe nulls in response rows. Keys are inferred unless marked
+`documented`, so example uniqueness is not treated as an upstream guarantee.
+
+From this example directory, regenerate or check without network access:
+
+```sh
+bun run catalog:generate
+bun run catalog:check
+```
+
+To inspect upstream drift without changing tracked files:
+
+```sh
+curl -fL https://developers.esb.co.id/esb-core/api_data.json -o /tmp/esb-api_data.json
+bun run catalog:check --input /tmp/esb-api_data.json
+```
+
+A changed input hash, selected contract, or stale override makes the check fail.
+The hash intentionally covers every source byte, including formatting and
+unselected endpoints; a hash-only diff does not mean a runtime contract changed.
+CI checks only the pinned input; it does not fetch upstream. After reviewing an
+update, replace `catalog-data/api_data.json` with the downloaded bytes, reconcile
+the explicit overrides, regenerate, and run `bun test` and `bun run check`.
+Review the generated diff before committing. The fixed contract digest in the
+generator test pins this connector's current 39 entities and 371 columns; change
+it only when intentionally accepting a runtime catalog change. New upstream
+fields do not silently enter the selected column list.
+
 ## Tests and conformance
 
 ```sh
