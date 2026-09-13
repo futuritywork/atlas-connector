@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COLUMN_OVERRIDES } from "../catalog-data/overrides";
 import { ESB_CORE_CATALOG } from "../src/catalog";
 import { buildCatalog, renderCatalog } from "./build-catalog";
 
@@ -97,6 +98,48 @@ describe("ESB catalog generation", () => {
         }),
       ),
     ).toThrow("stale type override");
+  });
+
+  test("rejects stale editorial descriptions", () => {
+    expect(() =>
+      buildCatalog(
+        changedEndpoint((entry) => {
+          entry.success.fields["Body Response"].find(
+            (field: any) => field.field === "result.data.purchaseNum",
+          ).description = "A changed upstream description";
+        }),
+      ),
+    ).toThrow("stale description override");
+  });
+
+  test("rejects overrides targeting unselected entities and fields", () => {
+    COLUMN_OVERRIDES.unselected_entity = {};
+    try {
+      expect(() => buildCatalog(data)).toThrow("unselected entity");
+    } finally {
+      delete COLUMN_OVERRIDES.unselected_entity;
+    }
+    COLUMN_OVERRIDES.advance_payments!.unselected_field = {};
+    try {
+      expect(() => buildCatalog(data)).toThrow("unselected field");
+    } finally {
+      delete COLUMN_OVERRIDES.advance_payments!.unselected_field;
+    }
+  });
+
+  test("normalizes upstream HTML descriptions before emitting metadata", () => {
+    const generated = buildCatalog(
+      changedEndpoint((entry) => {
+        entry.success.fields["Body Response"].find(
+          (field: any) => field.field === "result.data.branchID",
+        ).description = "<p>A  &amp; B</p>";
+      }),
+    );
+    expect(
+      generated
+        .find((entry) => entry.name === "advance_payments")!
+        .columns.find((column) => column.name === "branchID")!.description,
+    ).toBe("A & B");
   });
 
   test("CLI checks fresh input without modifying the checked-in catalog", async () => {
